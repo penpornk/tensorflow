@@ -9,9 +9,10 @@ bazel build --config=opt :sgemm
 ```
 
 To try with MKL-DNN v0.18 or v0.20.4, rename the appropriate `tf_http_archive` in
-`${TENSORFLOW_ROOT}/tensorflow/workspace.bzl` to `mkl_dnn` (and rename the current `mkl_dnn` to something else).
+`${TENSORFLOW_ROOT}/tensorflow/workspace.bzl` to `mkl_dnn` (and rename the current `mkl_dnn` in line 136 to something else).
 * v0.18: change line 149
 * v0.20.4: change line 162
+
 Then, run
 ```
 cd ${TENSORFLOW_ROOT}/tensorflow/sgemm
