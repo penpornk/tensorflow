@@ -38,8 +38,8 @@ void call_sgemm(float* a, float* b, float* c, const int m, const int n,
 
 void fill_matrix(float* mat, int m, int n) {
   for (int i = 0; i < m * n; ++i) {
-    int sign = -1 * (rand() % 2);
-    mat[i] = sign * (rand() % 10);
+    int sign = (rand() % 2)? 1 : -1;
+    mat[i] = sign * ((rand() % 10) + 1);  // We don't want zeroes.
   }
 }
 
