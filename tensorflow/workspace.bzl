@@ -143,6 +143,33 @@ def tf_repositories(path_prefix = "", tf_repo_name = ""):
         ],
     )
 
+    # MKL-DNN v0.18
+    # Rename this to mkl_dnn to try with sgemm.
+    tf_http_archive(
+        name = "mkl_dnn_v0_18",
+        build_file = clean_dep("//third_party/mkl_dnn:mkldnn.BUILD"),
+        sha256 = "38a1c02104ee9f630c1ad68164119cd58ad0aaf59e04ccbe7bd5781add7bfbea",
+        strip_prefix = "mkl-dnn-0.18",
+        urls = [
+            "https://storage.googleapis.com/mirror.tensorflow.org/github.com/intel/mkl-dnn/archive/v0.18.tar.gz",
+            "https://github.com/intel/mkl-dnn/archive/v0.18.tar.gz",
+        ],
+    )
+
+    # MKL-DNN v0.20.4
+    # Rename this to mkl_dnn to try with sgemm.
+    tf_http_archive(
+        name = "mkl_dnn_v0_20_4",
+        build_file = clean_dep("//third_party/mkl_dnn:mkldnn.BUILD"),
+        sha256 = "b6422a000a6754334bdae673c25f84efd95e6d3cd016b752145b9391dc13e729",
+        strip_prefix = "mkl-dnn-0.20.4",
+        urls = [
+            "https://storage.googleapis.com/mirror.tensorflow.org/github.com/intel/mkl-dnn/archive/v0.20.4.tar.gz",
+            "https://github.com/intel/mkl-dnn/archive/v0.20.4.tar.gz",
+        ],
+    )
+
+
     tf_http_archive(
         name = "mkl_dnn_v1",
         build_file = clean_dep("//third_party/mkl_dnn:mkldnn.BUILD"),
