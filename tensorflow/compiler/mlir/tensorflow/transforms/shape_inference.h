@@ -18,10 +18,10 @@ limitations under the License.
 
 #include <cstdint>
 
-#include "mlir/IR/Function.h"  // TF:local_config_mlir
-#include "mlir/IR/Operation.h"  // TF:local_config_mlir
-#include "mlir/IR/Region.h"  // TF:local_config_mlir
-#include "mlir/Support/LogicalResult.h"  // TF:local_config_mlir
+#include "mlir/IR/Function.h"  // TF:llvm-project
+#include "mlir/IR/Operation.h"  // TF:llvm-project
+#include "mlir/IR/Region.h"  // TF:llvm-project
+#include "mlir/Support/LogicalResult.h"  // TF:llvm-project
 
 namespace mlir {
 
@@ -40,6 +40,16 @@ bool InferShapeForSingleOperation(Operation* op, Dialect* tf_dialect,
 // before max_iteration.
 LogicalResult InferShapeUntilFixPoint(Region* region, int64_t graph_version,
                                       int64_t max_iteration = 10);
+
+// Given a list of refined shapes matching the function arguments of func, runs
+// shape inference over the function to propagate this updated information.
+LogicalResult InferShapeForFunction(FuncOp func,
+                                    ArrayRef<ArrayRef<int64_t>> arg_shapes,
+                                    int64_t graph_version);
+
+// Refines the return type of the given function by folding tf.Cast that
+// precedes the return instruction.
+LogicalResult InferShapeForFunctionType(FuncOp func);
 
 }  // namespace TF
 

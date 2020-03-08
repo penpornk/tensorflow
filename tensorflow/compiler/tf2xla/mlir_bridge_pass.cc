@@ -17,56 +17,28 @@ limitations under the License.
 
 #include <string>
 
-#include "llvm/ADT/SmallVector.h"
+#include "absl/container/flat_hash_set.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/raw_os_ostream.h"
-#include "mlir/IR/Attributes.h"  // TF:local_config_mlir
-#include "mlir/IR/Builders.h"  // TF:local_config_mlir
-#include "mlir/IR/Module.h"  // TF:local_config_mlir
 #include "tensorflow/compiler/mlir/tensorflow/transforms/bridge.h"
 #include "tensorflow/compiler/mlir/tensorflow/translate/export_graphdef.h"
 #include "tensorflow/compiler/mlir/tensorflow/translate/import_model.h"
 #include "tensorflow/compiler/mlir/tensorflow/translate/mlir_roundtrip_flags.h"
-#include "tensorflow/core/common_runtime/device.h"
-#include "tensorflow/core/common_runtime/device_set.h"
+#include "tensorflow/compiler/mlir/tensorflow/utils/device_util.h"
+#include "tensorflow/compiler/mlir/tensorflow/utils/dump_mlir_util.h"
 #include "tensorflow/core/graph/graph_constructor.h"
-#include "tensorflow/core/util/device_name_utils.h"
+#include "tensorflow/core/public/session_options.h"
 
 namespace tensorflow {
-
-// Collects all devices known to the system by name and adds them as an array
-// attribute of string attributes to the module. Device names added are in the
-// following form:
-//   /job:<name>/replica:<replica>/task:<task>/device:<type>:<device_num>
-static void AddDevicesToModule(mlir::ModuleOp module,
-                               const DeviceSet* device_set) {
-  if (!device_set) return;
-
-  // Collect devices as strings in TensorFlow device name form.
-  llvm::SmallVector<std::string, 8> devices;
-  devices.reserve(device_set->devices().size());
-  for (Device* device : device_set->devices())
-    devices.push_back(
-        DeviceNameUtils::ParsedNameToString(device->parsed_name()));
-
-  llvm::SmallVector<llvm::StringRef, 8> device_refs(devices.begin(),
-                                                    devices.end());
-  mlir::Builder builder(module);
-  module.setAttr("tf.devices", builder.getStrArrayAttr(device_refs));
-}
 
 // Dumps the MLIR module to disk.
 // This require the TF_DUMP_GRAPH_PREFIX to be set to a path that exist (or can
 // be created).
 static void DumpModule(mlir::ModuleOp module, llvm::StringRef file_prefix) {
-  const char* prefix_env = getenv("TF_DUMP_GRAPH_PREFIX");
-  if (!prefix_env) {
-    LOG(WARNING)
-        << "Failed to dump MLIR module because dump location is not "
-        << " specified through TF_DUMP_GRAPH_PREFIX environment variable.";
+  std::string prefix = GetDumpDirFromEnvVar();
+  if (prefix.empty()) {
     return;
   }
-  std::string prefix = prefix_env;
 
   auto* env = tensorflow::Env::Default();
   auto status = env->RecursivelyCreateDir(prefix);
@@ -112,30 +84,91 @@ static void DumpModule(mlir::ModuleOp module, llvm::StringRef file_prefix) {
 // and attached to a "compile" operation, whose result is fed to an "execute"
 // operation. The kernel for these operations is responsible to lower the
 // encapsulated graph to a particular device.
-Status MlirBridgePass::Run(const GraphOptimizationPassOptions& options) {
-  if (!options.session_options->config.experimental().enable_mlir_bridge()) {
+Status MlirBridgePass::Run(const DeviceSet& device_set,
+                           const ConfigProto& config_proto,
+                           std::unique_ptr<Graph>* graph,
+                           FunctionLibraryDefinition* flib_def,
+                           std::vector<std::string>* control_ret_node_names,
+                           bool* control_rets_updated) {
+  if (!config_proto.experimental().enable_mlir_bridge()) {
     VLOG(1) << "Skipping MLIR Bridge Pass, session flag not enabled";
     return Status::OK();
   }
+
+  VLOG(1) << "Running MLIR Bridge Pass";
+
   GraphDebugInfo debug_info;
   mlir::MLIRContext context;
-  GraphImportConfig specs;
-  GraphExportConfig confs;
-  TF_ASSIGN_OR_RETURN(auto module,
-                      ConvertGraphToMlir(**options.graph, debug_info,
-                                         *options.flib_def, specs, &context));
+  GraphImportConfig import_config;
+  import_config.graph_as_function = true;
+  import_config.control_outputs = *control_ret_node_names;
+  TF_ASSIGN_OR_RETURN(auto module_ref,
+                      ConvertGraphToMlir(**graph, debug_info, *flib_def,
+                                         import_config, &context));
 
-  AddDevicesToModule(*module, options.device_set);
+  AddDevicesToOp(*module_ref, &device_set);
 
-  if (VLOG_IS_ON(1)) DumpModule(*module, "mlir_bridge_before_");
+  if (VLOG_IS_ON(1)) DumpModule(*module_ref, "mlir_bridge_before_");
 
   // Run the bridge now
-  TF_RETURN_IF_ERROR(mlir::TFTPU::TPUBridge(*module));
+  TF_RETURN_IF_ERROR(
+      mlir::TFTPU::TPUBridge(*module_ref, /*enable_logging=*/VLOG_IS_ON(1)));
 
-  if (VLOG_IS_ON(1)) DumpModule(*module, "mlir_bridge_after_");
+  if (VLOG_IS_ON(1)) DumpModule(*module_ref, "mlir_bridge_after_");
 
+  GraphExportConfig export_config;
+  export_config.graph_as_function = true;
+  absl::flat_hash_set<Node*> control_ret_nodes;
   TF_RETURN_WITH_CONTEXT_IF_ERROR(
-      ConvertMlirToGraph(*module, confs, options.graph, options.flib_def),
+      ConvertMlirToGraph(*module_ref, export_config, graph, flib_def,
+                         &control_ret_nodes),
+      "Error converting MLIR module back to graph");
+
+  control_ret_node_names->clear();
+  control_ret_node_names->reserve(control_ret_nodes.size());
+  for (const auto* node : control_ret_nodes)
+    control_ret_node_names->push_back(node->name());
+
+  *control_rets_updated = true;
+
+  return Status::OK();
+}
+
+Status MlirBridgeV1CompatPass::Run(
+    const GraphOptimizationPassOptions& options) {
+  // Skip function graphs as MlirBridgePass will be used instead.
+  if (options.is_function_graph) return Status::OK();
+
+  if (!options.session_options->config.experimental().enable_mlir_bridge()) {
+    VLOG(1) << "Skipping MLIR Bridge V1 Compat Pass, session flag not enabled";
+    return Status::OK();
+  }
+
+  VLOG(1) << "Running MLIR Bridge V1 Compat Pass";
+
+  GraphDebugInfo debug_info;
+  mlir::MLIRContext context;
+  GraphImportConfig import_config;
+  import_config.upgrade_legacy = true;
+  TF_ASSIGN_OR_RETURN(
+      auto module_ref,
+      ConvertGraphToMlir(**options.graph, debug_info, *options.flib_def,
+                         import_config, &context));
+
+  AddDevicesToOp(*module_ref, options.device_set);
+
+  if (VLOG_IS_ON(1)) DumpModule(*module_ref, "mlir_bridge_v1_compat_before_");
+
+  // Run the bridge now
+  TF_RETURN_IF_ERROR(mlir::TFTPU::TPUBridgeV1Compat(
+      *module_ref, /*enable_logging=*/VLOG_IS_ON(1)));
+
+  if (VLOG_IS_ON(1)) DumpModule(*module_ref, "mlir_bridge_v1_compat_after_");
+
+  GraphExportConfig export_config;
+  TF_RETURN_WITH_CONTEXT_IF_ERROR(
+      ConvertMlirToGraph(*module_ref, export_config, options.graph,
+                         options.flib_def),
       "Error converting MLIR module back to graph");
 
   return Status::OK();

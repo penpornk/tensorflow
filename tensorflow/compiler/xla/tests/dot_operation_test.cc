@@ -24,6 +24,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/client/xla_builder.h"
 #include "tensorflow/compiler/xla/primitive_util.h"
 #include "tensorflow/compiler/xla/reference_util.h"
+#include "tensorflow/compiler/xla/service/hlo_parser.h"
 #include "tensorflow/compiler/xla/shape_util.h"
 #include "tensorflow/compiler/xla/tests/client_library_test_base.h"
 #include "tensorflow/compiler/xla/tests/hlo_test_base.h"
@@ -486,7 +487,8 @@ XLA_TEST_P(ParametricDotTestWithoutLayoutAssignment, TestF16) {
 XLA_TEST_P(ParametricDotTestWithoutLayoutAssignment, TestF32) {
   TestImpl<float>();
 }
-XLA_TEST_P(ParametricDotTestWithoutLayoutAssignment, TestF64) {
+// TODO(b/147505663): Disabled for now.
+XLA_TEST_P(ParametricDotTestWithoutLayoutAssignment, DISABLED_TestF64) {
   TestImpl<double>();
 }
 
@@ -1468,7 +1470,9 @@ ENTRY MatrixVectorComplex {
 }
 )";
 
-  EXPECT_TRUE(RunAndCompare(hlo_string, ErrorSpec{4e-3, 4e-3}));
+  TF_ASSERT_OK_AND_ASSIGN(auto hlo_module,
+                          ParseAndReturnUnverifiedModule(hlo_string));
+  EXPECT_TRUE(RunAndCompare(std::move(hlo_module), ErrorSpec{4e-3, 4e-3}));
 }
 
 // Regression test for b/138155357, where we were incorrectly creating a dot-add
@@ -1668,11 +1672,10 @@ void DOT_ReorderContracting(int num_iters) {
       client->LiteralToShapedBuffer(input_literal, device_ordinal)
           .ConsumeValueOrDie();
 
-  std::unique_ptr<LocalExecutable> executable =
-      client
-          ->Compile(computation, {&buffer0.on_host_shape()},
-                    ExecutableBuildOptions())
-          .ConsumeValueOrDie();
+  TF_ASSERT_OK_AND_ASSIGN(
+      auto executables, client->Compile(computation, {&buffer0.on_host_shape()},
+                                        ExecutableBuildOptions()));
+  auto executable = std::move(executables[0]);
 
   se::Stream stream(executors[device_ordinal]);
   stream.Init();

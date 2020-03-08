@@ -12,9 +12,11 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
+
 #include "tensorflow/core/framework/dataset.h"
 #include "tensorflow/core/framework/tensor_util.h"
 #include "tensorflow/core/kernels/data/name_utils.h"
+#include "tensorflow/core/platform/stringprintf.h"
 
 namespace tensorflow {
 namespace data {
@@ -58,7 +60,9 @@ class RebatchDatasetOp : public UnaryDatasetOpKernel {
           input_(input),
           num_replicas_(num_replicas),
           output_types_(output_types),
-          output_shapes_(output_shapes) {
+          output_shapes_(output_shapes),
+          traceme_metadata_(
+              {{"num_replicas", strings::Printf("%lld", num_replicas)}}) {
       input_->Ref();
     }
 
@@ -111,7 +115,8 @@ class RebatchDatasetOp : public UnaryDatasetOpKernel {
       ~Iterator() override {}
 
       Status Initialize(IteratorContext* ctx) override {
-        return dataset()->input_->MakeIterator(ctx, prefix(), &input_impl_);
+        return dataset()->input_->MakeIterator(ctx, this, prefix(),
+                                               &input_impl_);
       }
 
       Status GetNextInternal(IteratorContext* ctx,
@@ -156,9 +161,9 @@ class RebatchDatasetOp : public UnaryDatasetOpKernel {
                                input_desc.original_batch_dim);
           if (start >= end) {
             // We can get here if ceil(original_batch_dim_ / new batch dim) <
-            // num_replicas_, i.e. the batch isn't big enough to distribute over
-            // num replicas. In this case, we return empty tensors for the
-            // remaining iterations that correspond to this batch.
+            // num_replicas_, i.e. the batch isn't big enough to distribute
+            // over num replicas. In this case, we return empty tensors for
+            // the remaining iterations that correspond to this batch.
             start = end;
           }
           Tensor slice = input_desc.whole_tensor.Slice(start, end);
@@ -223,6 +228,10 @@ class RebatchDatasetOp : public UnaryDatasetOpKernel {
         return Status::OK();
       }
 
+      TraceMeMetadata GetTraceMeMetadata() const override {
+        return dataset()->traceme_metadata_;
+      }
+
      private:
       // Describes one component of the input.
       struct InputDescriptor {
@@ -240,14 +249,15 @@ class RebatchDatasetOp : public UnaryDatasetOpKernel {
 
       mutex mu_;
       std::unique_ptr<IteratorBase> input_impl_;
-      std::vector<InputDescriptor> input_descriptors_ GUARDED_BY(mu_);
-      int64 slice_number_ GUARDED_BY(mu_) = 0;
+      std::vector<InputDescriptor> input_descriptors_ TF_GUARDED_BY(mu_);
+      int64 slice_number_ TF_GUARDED_BY(mu_) = 0;
     };
 
     const DatasetBase* const input_;
     const int64 num_replicas_;
     const DataTypeVector output_types_;
     const std::vector<PartialTensorShape> output_shapes_;
+    const TraceMeMetadata traceme_metadata_;
   };
 
   DataTypeVector output_types_;

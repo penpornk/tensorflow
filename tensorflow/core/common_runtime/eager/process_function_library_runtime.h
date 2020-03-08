@@ -23,7 +23,6 @@ limitations under the License.
 #include "tensorflow/core/platform/platform.h"
 // clang-format on
 
-#include "absl/types/variant.h"
 #include "tensorflow/core/common_runtime/device_mgr.h"
 #include "tensorflow/core/common_runtime/process_function_library_runtime.h"
 #include "tensorflow/core/lib/gtl/array_slice.h"
@@ -34,10 +33,6 @@ limitations under the License.
 namespace tensorflow {
 namespace eager {
 
-#if !defined(IS_MOBILE_PLATFORM)
-using VariantFunctionArg = absl::variant<Tensor, eager::RemoteTensorHandle*>;
-#endif  // IS_MOBILE_PLATFORM
-
 // A ProcessFunctionLibraryRuntime which supports running functions with inputs
 // on remote devices.
 // TODO(b/134094971): Support outputting tensors on remote devices.
@@ -45,22 +40,21 @@ class EagerProcessFunctionLibraryRuntime
     : public ProcessFunctionLibraryRuntime {
  public:
   EagerProcessFunctionLibraryRuntime(
-      const DeviceMgr* device_mgr, Env* env, int graph_def_version,
-      const FunctionLibraryDefinition* lib_def,
+      const DeviceMgr* device_mgr, Env* env, const ConfigProto* config,
+      int graph_def_version, const FunctionLibraryDefinition* lib_def,
       const OptimizerOptions& optimizer_options,
       thread::ThreadPool* thread_pool = nullptr,
       DistributedFunctionLibraryRuntime* parent = nullptr,
       const CustomKernelCreator* custom_kernel_creator = nullptr)
-      : ProcessFunctionLibraryRuntime(device_mgr, env, graph_def_version,
-                                      lib_def, optimizer_options, thread_pool,
-                                      parent, custom_kernel_creator) {}
+      : ProcessFunctionLibraryRuntime(
+            device_mgr, env, config, graph_def_version, lib_def,
+            optimizer_options, thread_pool, parent, custom_kernel_creator) {}
 
 #if !defined(IS_MOBILE_PLATFORM)
   void Run(const FunctionLibraryRuntime::Options& opts,
            FunctionLibraryRuntime::Handle handle,
-           const std::vector<VariantFunctionArg>& args,
-           std::vector<Tensor>* rets,
-           FunctionLibraryRuntime::DoneCallback done) const;
+           const FunctionArgsInterface& args, std::vector<Tensor>* rets,
+           FunctionLibraryRuntime::DoneCallback done) const override;
 
  private:
   void RunRemoteDevice(

@@ -19,6 +19,7 @@ from __future__ import division
 from __future__ import print_function
 
 import itertools
+
 import numpy as np
 
 from tensorflow.python.eager import backprop
@@ -302,7 +303,7 @@ class TridiagonalSolveOpTest(test.TestCase):
     self._testWithLists(
         diags=_sample_diags,
         rhs=np.array([_sample_rhs, 2 * _sample_rhs]),
-        expected=np.array([_sample_result, 2 * _sample_result]),
+        expected=np.array([_sample_result, 2 * _sample_result]).T,
         transpose_rhs=True)
 
   def testConjugateRhs(self):
@@ -318,7 +319,7 @@ class TridiagonalSolveOpTest(test.TestCase):
         diags=_sample_diags,
         rhs=np.array([_sample_rhs * (1 + 1j), _sample_rhs * (1 - 2j)]),
         expected=np.array(
-            [_sample_result * (1 - 1j), _sample_result * (1 + 2j)]),
+            [_sample_result * (1 - 1j), _sample_result * (1 + 2j)]).T,
         transpose_rhs=True,
         conjugate_rhs=True)
 
@@ -328,7 +329,8 @@ class TridiagonalSolveOpTest(test.TestCase):
         rhs=np.array([[_sample_rhs, 2 * _sample_rhs],
                       [3 * _sample_rhs, 4 * _sample_rhs]]),
         expected=np.array([[_sample_result, 2 * _sample_result],
-                           [-3 * _sample_result, -4 * _sample_result]]),
+                           [-3 * _sample_result,
+                            -4 * _sample_result]]).transpose(0, 2, 1),
         transpose_rhs=True)
 
   def testTransposeRhsWithRhsAsVector(self):

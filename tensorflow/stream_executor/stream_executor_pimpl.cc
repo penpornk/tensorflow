@@ -47,7 +47,7 @@ bool FLAGS_check_device_leaks = false;
 namespace stream_executor {
 namespace {
 
-string StackTraceIfVLOG10() {
+std::string StackTraceIfVLOG10() {
   if (VLOG_IS_ON(10)) {
     return absl::StrCat(" ", port::CurrentStackTrace(), "\n");
   } else {
@@ -149,7 +149,7 @@ StreamExecutor::StreamExecutor(
       mem_alloc_bytes_(0),
       memory_limit_bytes_(GetMemoryLimitBytes()),
       allocator_(this) {
-  string name = absl::AsciiStrToLower(platform_->Name());
+  std::string name = absl::AsciiStrToLower(platform_->Name());
   if (name == "cuda") {
     platform_kind_ = PlatformKind::kCuda;
   } else if (name == "rocm") {
@@ -239,7 +239,7 @@ port::Status StreamExecutor::SetDeviceSharedMemoryConfig(
   if (config != SharedMemoryConfig::kDefault &&
       config != SharedMemoryConfig::kFourByte &&
       config != SharedMemoryConfig::kEightByte) {
-    string error_msg = absl::StrFormat(
+    std::string error_msg = absl::StrFormat(
         "Invalid shared memory config specified: %d", static_cast<int>(config));
     LOG(ERROR) << error_msg;
     return port::Status(port::error::INVALID_ARGUMENT, error_msg);
@@ -288,6 +288,22 @@ bool StreamExecutor::GetConvolveAlgorithms(
   GetDeviceDescription().cuda_compute_capability(&cc_major, &cc_minor);
   return dnn_support->GetConvolveAlgorithms(with_winograd_nonfused, cc_major,
                                             cc_minor, out_algorithms);
+}
+
+bool StreamExecutor::GetMIOpenConvolveAlgorithms(
+    dnn::ConvolutionKind kind, Stream *stream, dnn::DataType element_type,
+    const dnn::BatchDescriptor &input_descriptor,
+    const dnn::FilterDescriptor &filter_descriptor,
+    const dnn::ConvolutionDescriptor &convolution_descriptor,
+    const dnn::BatchDescriptor &output_descriptor,
+    std::vector<dnn::ProfileResult> *out_algorithms) {
+  dnn::DnnSupport *dnn_support = AsDnn();
+  if (!dnn_support) {
+    return false;
+  }
+  return dnn_support->GetMIOpenConvolveAlgorithms(
+      kind, stream, element_type, input_descriptor, filter_descriptor,
+      convolution_descriptor, output_descriptor, out_algorithms);
 }
 
 bool StreamExecutor::GetRnnAlgorithms(
@@ -476,7 +492,7 @@ DeviceMemoryBase StreamExecutor::Allocate(uint64 size, int64 memory_space) {
 }
 
 port::StatusOr<DeviceMemoryBase> StreamExecutor::GetUntypedSymbol(
-    const string &symbol_name, ModuleHandle module_handle) {
+    const std::string &symbol_name, ModuleHandle module_handle) {
   // If failed to get the symbol, opaque/bytes are unchanged. Initialize them to
   // be nullptr/0 for consistency with DeviceMemory semantics.
   void *opaque = nullptr;
@@ -499,7 +515,7 @@ port::StatusOr<DeviceMemoryBase> StreamExecutor::GetUntypedSymbol(
   }
 }
 
-bool StreamExecutor::GetSymbol(const string &symbol_name,
+bool StreamExecutor::GetSymbol(const std::string &symbol_name,
                                ModuleHandle module_handle, void **mem,
                                size_t *bytes) {
   return implementation_->GetSymbol(symbol_name, module_handle, mem, bytes);
@@ -561,16 +577,16 @@ bool StreamExecutor::SynchronizeAllActivity() {
   return ok;
 }
 
-bool StreamExecutor::SynchronousMemZero(DeviceMemoryBase *location,
-                                        uint64 size) {
+port::Status StreamExecutor::SynchronousMemZero(DeviceMemoryBase *location,
+                                                uint64 size) {
   VLOG(1) << "Called StreamExecutor::SynchronousMemZero(location=" << location
           << ", size=" << size << ")" << StackTraceIfVLOG10();
 
   return implementation_->SynchronousMemZero(location, size);
 }
 
-bool StreamExecutor::SynchronousMemSet(DeviceMemoryBase *location, int value,
-                                       uint64 size) {
+port::Status StreamExecutor::SynchronousMemSet(DeviceMemoryBase *location,
+                                               int value, uint64 size) {
   VLOG(1) << "Called StreamExecutor::SynchronousMemSet(location=" << location
           << ", value=" << value << ", size=" << size << ")"
           << StackTraceIfVLOG10();
@@ -689,13 +705,14 @@ bool StreamExecutor::MemcpyDeviceToDevice(Stream *stream,
                                                size);
 }
 
-bool StreamExecutor::MemZero(Stream *stream, DeviceMemoryBase *location,
-                             uint64 size) {
+port::Status StreamExecutor::MemZero(Stream *stream, DeviceMemoryBase *location,
+                                     uint64 size) {
   return implementation_->MemZero(stream, location, size);
 }
 
-bool StreamExecutor::Memset32(Stream *stream, DeviceMemoryBase *location,
-                              uint32 pattern, uint64 size) {
+port::Status StreamExecutor::Memset32(Stream *stream,
+                                      DeviceMemoryBase *location,
+                                      uint32 pattern, uint64 size) {
   CHECK_EQ(0, size % 4)
       << "need 32-bit multiple size to fill with 32-bit pattern";
   return implementation_->Memset32(stream, location, pattern, size);
@@ -898,7 +915,7 @@ port::Status StreamExecutorMemoryAllocator::Deallocate(int device_ordinal,
 }
 
 port::StatusOr<StreamExecutor *>
-StreamExecutorMemoryAllocator::GetStreamExecutor(int device_ordinal) {
+StreamExecutorMemoryAllocator::GetStreamExecutor(int device_ordinal) const {
   if (device_ordinal < 0) {
     return tensorflow::errors::InvalidArgument(absl::StrFormat(
         "device ordinal value (%d) must be non-negative", device_ordinal));
@@ -915,6 +932,26 @@ StreamExecutorMemoryAllocator::GetStreamExecutor(int device_ordinal) {
 
 bool StreamExecutorMemoryAllocator::AllowsAsynchronousDeallocation() const {
   return false;
+}
+
+port::StatusOr<Stream *> StreamExecutorMemoryAllocator::GetStream(
+    int device_ordinal) {
+  CHECK(!AllowsAsynchronousDeallocation())
+      << "The logic below only works for synchronous allocators";
+  TF_ASSIGN_OR_RETURN(StreamExecutor * executor,
+                      GetStreamExecutor(device_ordinal));
+  Stream *out = [&] {
+    absl::MutexLock lock(&mutex_);
+    if (!streams_.count(device_ordinal)) {
+      auto p = streams_.emplace(std::piecewise_construct,
+                                std::forward_as_tuple(device_ordinal),
+                                std::forward_as_tuple(executor));
+      p.first->second.Init();
+      return &p.first->second;
+    }
+    return &streams_.at(device_ordinal);
+  }();
+  return out;
 }
 
 }  // namespace stream_executor

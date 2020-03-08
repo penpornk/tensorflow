@@ -30,7 +30,6 @@ limitations under the License.
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/framework/types.pb.h"
 #include "tensorflow/core/lib/gtl/map_util.h"
-#include "tensorflow/core/lib/gtl/stl_util.h"
 #include "tensorflow/core/lib/strings/str_util.h"
 #include "tensorflow/core/lib/strings/strcat.h"
 #include "tensorflow/core/lib/strings/stringprintf.h"
@@ -708,8 +707,8 @@ bool GenEagerPythonOp::AddEagerFastPathAndGraphCode(
 
   strings::StrAppend(&result_,
                      "  _ctx = _context._context or _context.context()\n"
-                     "  if _ctx._thread_local_data.is_eager:",
-                     "\n");
+                     "  tld = _ctx._thread_local_data\n",
+                     "  if tld.is_eager:", "\n");
   if (eager_not_allowed_error.empty()) {
     AddEagerFastPathExecute();
   } else {
@@ -762,9 +761,9 @@ bool GenEagerPythonOp::AddEagerFallbackCode(
 }
 
 void GenEagerPythonOp::AddEagerFastPathExecute() {
-  string fastpath_execute_params = strings::StrCat(
-      "_ctx._context_handle, _ctx._thread_local_data.device_name, \"",
-      op_def_.name(), "\", ", "name, _ctx.op_callbacks");
+  string fastpath_execute_params =
+      strings::StrCat("_ctx._context_handle, tld.device_name, \"",
+                      op_def_.name(), "\", ", "name, tld.op_callbacks");
   string fallback_params;
 
   for (int i = 0; i < api_def_.in_arg_size(); i++) {
@@ -790,8 +789,7 @@ void GenEagerPythonOp::AddEagerFastPathExecute() {
 
   strings::StrAppend(&result_, "    try:\n");
   strings::StrAppend(
-      &result_, "      ",
-      "_result = _pywrap_tensorflow.TFE_Py_FastPathExecute(\n",
+      &result_, "      ", "_result = pywrap_tfe.TFE_Py_FastPathExecute(\n",
       WordWrap(strings::StrCat("        "),
                strings::StrCat(fastpath_execute_params, ")"), kRightMargin),
       "\n");
@@ -1001,7 +999,7 @@ This file is MACHINE GENERATED! Do not edit.
 
 import collections
 
-from tensorflow.python import pywrap_tensorflow as _pywrap_tensorflow
+from tensorflow.python import pywrap_tfe as pywrap_tfe
 from tensorflow.python.eager import context as _context
 from tensorflow.python.eager import core as _core
 from tensorflow.python.eager import execute as _execute
@@ -1074,9 +1072,8 @@ void PrintPythonOps(const OpList& ops, const ApiDefMap& api_defs,
 }
 
 string GetPythonWrappers(const char* op_list_buf, size_t op_list_len) {
-  string op_list_str(op_list_buf, op_list_len);
   OpList ops;
-  ops.ParseFromString(op_list_str);
+  ops.ParseFromArray(op_list_buf, op_list_len);
 
   ApiDefMap api_def_map(ops);
   return GetPythonOps(ops, api_def_map, {});

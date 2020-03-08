@@ -43,30 +43,41 @@ void EagerProcessFunctionLibraryRuntime::RunRemoteDevice(
                               "EagerClusterFunctionLibraryRuntime."));
     return;
   }
+  if (args.remote_args == nullptr) {
+    done(
+        errors::Internal("EagerClusterFunctionLibraryRuntime: remote_args "
+                         "should never be null."));
+    return;
+  }
   parent_->Run(opts, local_handle, args.remote_args, std::move(done));
 }
 
 void EagerProcessFunctionLibraryRuntime::Run(
     const FunctionLibraryRuntime::Options& opts,
-    FunctionLibraryRuntime::Handle handle,
-    const std::vector<VariantFunctionArg>& args, std::vector<Tensor>* rets,
+    FunctionLibraryRuntime::Handle handle, const FunctionArgsInterface& args,
+    std::vector<Tensor>* rets,
     FunctionLibraryRuntime::DoneCallback done) const {
+  if (!args.HasRemoteInputs()) {
+    return ProcessFunctionLibraryRuntime::Run(opts, handle, args, rets,
+                                              std::move(done));
+  }
   auto* cleanup_items = new std::vector<std::unique_ptr<CleanUpItem>>;
   done = ApplyCleanUpToDoneCallback(cleanup_items, done);
 
-  auto get_component_args =
-      [&args](const ComponentFunctionData& comp_data) -> InternalArgs {
-    InternalArgs comp_args;
+  auto get_component_args = [&args](const ComponentFunctionData& comp_data,
+                                    InternalArgs* comp_args) -> Status {
     for (int i = 0; i < comp_data.arg_indices_.size(); ++i) {
-      int index = comp_data.arg_indices_.at(i);
-      if (absl::holds_alternative<Tensor>(args.at(index))) {
-        comp_args.local_args.push_back(absl::get<Tensor>(args[i]));
+      const int index = comp_data.arg_indices_.at(i);
+      Tensor tensor;
+      if (args.GetLocalArg(index, &tensor).ok()) {
+        comp_args->local_args.push_back(std::move(tensor));
       } else {
-        comp_args.remote_args.push_back(
-            absl::get<RemoteTensorHandle*>(args[i]));
+        RemoteTensorHandle remote_handle;
+        TF_RETURN_IF_ERROR(args.GetRemoteArg(index, &remote_handle));
+        comp_args->remote_args.push_back(std::move(remote_handle));
       }
     }
-    return comp_args;
+    return Status::OK();
   };
   return RunMultiDevice(opts, handle, rets, cleanup_items, std::move(done),
                         std::move(get_component_args));

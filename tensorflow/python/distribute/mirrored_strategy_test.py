@@ -23,7 +23,9 @@ import sys
 
 from absl.testing import parameterized
 import numpy as np
+
 from tensorflow.core.protobuf import config_pb2
+from tensorflow.python.autograph.core import converter_testing
 from tensorflow.python.data.ops import dataset_ops
 from tensorflow.python.distribute import combinations
 from tensorflow.python.distribute import cross_device_ops as cross_device_ops_lib
@@ -290,8 +292,8 @@ class MirroredStrategyVariableCreatorStackTest(
     def model_fn():
       replica_id_str = str(self.evaluate(_replica_id()))
 
-      def thread_creator_fn(next_creator, *args, **kwargs):
-        return next_creator(*args, **kwargs) + ":thread_" + replica_id_str
+      def thread_creator_fn(next_creator, **kwargs):
+        return next_creator(**kwargs) + ":thread_" + replica_id_str
 
       with variable_scope.variable_creator_scope(thread_creator_fn):
         # Create a variable in this scope.
@@ -301,9 +303,9 @@ class MirroredStrategyVariableCreatorStackTest(
         ds_context.get_replica_context().merge_call(lambda _: _)
       return v
 
-    def main_thread_creator(next_creator, *args, **kwargs):
+    def main_thread_creator(next_creator, **kwargs):
       # We are not using the underlying next_creator for test purposes.
-      del next_creator, args, kwargs
+      del next_creator, kwargs
       return "main_thread"
 
     with context.graph_mode(), \
@@ -353,7 +355,9 @@ class MirroredStrategyCallForEachReplicaTest(test.TestCase):
 
     with distribution.scope():
       result = distribution.extended.call_for_each_replica(model_fn)
-      self.assertEqual((0, 1), self.evaluate(result.values))
+      self.assertEqual(
+          (0, 1),
+          self.evaluate(distribution.experimental_local_results(result)))
       self.assertLen(traces, distribution.num_replicas_in_sync)
 
   def testFunctionInCallForEachReplicaInsideAnotherFunction(self, distribution):
@@ -369,7 +373,9 @@ class MirroredStrategyCallForEachReplicaTest(test.TestCase):
 
     with distribution.scope():
       result = step()
-      self.assertEqual((0, 1), self.evaluate(result.values))
+      self.assertEqual(
+          (0, 1),
+          self.evaluate(distribution.experimental_local_results(result)))
       self.assertLen(traces, distribution.num_replicas_in_sync)
 
   def testNestedFunctionInCallForEachReplicaWithMergeCall(self, distribution):
@@ -652,7 +658,6 @@ class MirroredVariableUpdateTest(test.TestCase):
       self.assertIsInstance(mirrored_var, values.MirroredVariable)
       self.evaluate(variables.global_variables_initializer())
       self.assertEqual(1.0, self.evaluate(mirrored_var))
-      self.assertIsNotNone(ops.tensor_id(mirrored_var))
       mirrored_var_result = self.evaluate(mirrored_var.assign(6.0))
       self.assertEqual(6.0, mirrored_var_result)
 
@@ -709,13 +714,33 @@ class MirroredVariableUpdateTest(test.TestCase):
       mirrored_var_result = self.evaluate(
           mirrored_var.assign_add(6.0, read_value=True))
       self.assertEqual(7.0, mirrored_var_result)
-      self.assertEqual(7.0, self.evaluate(mirrored_var.get("/device:CPU:0")))
-      self.assertEqual(7.0, self.evaluate(mirrored_var.get("/device:GPU:0")))
+      self.assertEqual(
+          7.0,
+          self.evaluate(
+              distribution.experimental_local_results(mirrored_var)[0]))
+      self.assertEqual(
+          7.0,
+          self.evaluate(
+              distribution.experimental_local_results(mirrored_var)[1]))
+      self.assertEqual(
+          distribution.extended.worker_devices[0], mirrored_var._devices[0])
+      self.assertEqual(
+          distribution.extended.worker_devices[1], mirrored_var._devices[1])
 
       # read_value == False
       self.evaluate(mirrored_var.assign_add(2.0, read_value=False))
-      self.assertEqual(9.0, self.evaluate(mirrored_var.get("/device:CPU:0")))
-      self.assertEqual(9.0, self.evaluate(mirrored_var.get("/device:GPU:0")))
+      self.assertEqual(
+          9.0,
+          self.evaluate(
+              distribution.experimental_local_results(mirrored_var)[0]))
+      self.assertEqual(
+          9.0,
+          self.evaluate(
+              distribution.experimental_local_results(mirrored_var)[1]))
+      self.assertEqual(
+          distribution.extended.worker_devices[0], mirrored_var._devices[0])
+      self.assertEqual(
+          distribution.extended.worker_devices[1], mirrored_var._devices[1])
 
   def testAssignAddMirroredVarReplicaContext(self, distribution):
     def var_fn():
@@ -767,8 +792,18 @@ class MirroredVariableUpdateTest(test.TestCase):
       self.assertEqual(5.0, self.evaluate(mirrored_var))
       mirrored_var_result = self.evaluate(mirrored_var.assign_sub(2.0))
       self.assertEqual(3.0, mirrored_var_result)
-      self.assertEqual(3.0, self.evaluate(mirrored_var.get("/device:GPU:0")))
-      self.assertEqual(3.0, self.evaluate(mirrored_var.get("/device:CPU:0")))
+      self.assertEqual(
+          3.0,
+          self.evaluate(
+              distribution.experimental_local_results(mirrored_var)[0]))
+      self.assertEqual(
+          3.0,
+          self.evaluate(
+              distribution.experimental_local_results(mirrored_var)[1]))
+      self.assertEqual(
+          distribution.extended.worker_devices[0], mirrored_var._devices[0])
+      self.assertEqual(
+          distribution.extended.worker_devices[1], mirrored_var._devices[1])
 
   def testAssignSubMirroredVarReplicaContext(self, distribution):
     def var_fn():
@@ -979,8 +1014,9 @@ class MirroredStrategyDefunTest(test.TestCase):
         per_replica_graph_functions = (
             distribution.extended.call_for_each_replica(
                 defun.get_concrete_function, args=[mock_model] + inputs))
-        for device in devices:
-          graph_function = per_replica_graph_functions.get(device=device)
+        for i in range(len(devices)):
+          graph_function = distribution.experimental_local_results(
+              per_replica_graph_functions)[i]
           # TODO(b/129555712): re-enable an assertion here that the two sets of
           # variables are the same.
           # self.assertEqual(set(graph_function.graph.variables),
@@ -1040,7 +1076,7 @@ class MirroredStrategyDefunTest(test.TestCase):
       with backprop.GradientTape(persistent=True) as gtape:
         result = fn2(mock_model)
       grads = gtape.gradient(result,
-                             [v.get() for v in mock_model.variables])
+                             [v._get() for v in mock_model.variables])
       return grads
 
     self._call_and_check(distribution, model_fn, [], [2.0, 1.0], [fn1, fn2],
@@ -1051,9 +1087,8 @@ class MirroredStrategyDefunTest(test.TestCase):
     def fn1(mock_model, factor):
       return mock_model(factor)
 
-    device_map = values.ReplicaDeviceMap(("/device:CPU:0", "/device:GPU:0"))
-    factors = values.PerReplica(device_map, (5.0, 3.0))
-    expected_result = values.PerReplica(device_map, (5.0 * 1.25, 3.0 * 1.25))
+    factors = values.PerReplica((5.0, 3.0))
+    expected_result = values.PerReplica((5.0 * 1.25, 3.0 * 1.25))
     self._call_and_check(distribution, fn1, [factors], expected_result, [fn1])
 
   def testTrain(self, distribution):
@@ -1196,69 +1231,27 @@ class MultiWorkerMirroredStrategyTest(
                 required_gpus=1)
         ],
         mode=["graph"]))
-class RemoteSingleWorkerMirroredStrategy(
-    multi_worker_test_base.SingleWorkerTestBase,
-    strategy_test_lib.DistributionTestBase):
+class RemoteSingleWorkerMirroredStrategyGraph(
+    multi_worker_test_base.SingleWorkerTestBaseGraph,
+    strategy_test_lib.RemoteSingleWorkerMirroredStrategyBase):
 
-  def test_num_replicas_in_sync(self, distribution):
-    self.assertEqual(context.num_gpus(), distribution.num_replicas_in_sync)
+  def _get_num_gpus(self):
+    return context.num_gpus()
 
-  def testMinimizeLossGraph(self, distribution):
-    self._test_minimize_loss_graph(distribution, learning_rate=0.05)
+  def testNumReplicasInSync(self, distribution):
+    self._testNumReplicasInSync(distribution)
+
+  def testMinimizeLoss(self, distribution):
+    self._testMinimizeLoss(distribution)
 
   def testDeviceScope(self, distribution):
-    """Test the device scope of single-worker MirroredStrategy."""
-    with distribution.scope():
-      a = constant_op.constant(1.)
-      with ops.device("/cpu:0"):
-        b = constant_op.constant(1.)
-      self.assertEqual(a.device, "/job:worker/replica:0/task:0")
-      self.assertEqual(b.device, "/job:worker/replica:0/task:0/device:CPU:0")
+    self._testDeviceScope(distribution)
 
   def testMakeInputFnIteratorWithDataset(self, distribution):
-    dataset_fn = lambda: dataset_ops.Dataset.range(100)
-    num_gpus = context.num_gpus()
-    num_workers = 1
-
-    expected_values = [[i+j for j in range(num_gpus)] * num_workers
-                       for i in range(0, 100, num_gpus)]
-
-    with context.graph_mode(), self.cached_session() as sess:
-      # `expected_input_pipeline_id` is None because the input_fn will be called
-      # multiple times, each with a different input_pipeline_id.
-      input_fn = self._input_fn_to_test_input_context(
-          dataset_fn,
-          expected_num_replicas_in_sync=num_workers*num_gpus,
-          expected_num_input_pipelines=num_workers,
-          expected_input_pipeline_id=None)
-      iterator = distribution.make_input_fn_iterator(input_fn)
-      self._test_input_fn_iterator(
-          iterator, distribution.extended.worker_devices, expected_values, sess)
+    self._testMakeInputFnIteratorWithDataset(distribution)
 
   def testMakeInputFnIteratorWithCallable(self, distribution):
-    def fn():
-      dataset = dataset_ops.Dataset.range(100)
-      it = dataset_ops.make_one_shot_iterator(dataset)
-      return it.get_next
-    num_gpus = context.num_gpus()
-    num_workers = 1
-
-    expected_values = []
-    for i in range(0, 100, num_gpus):
-      expected_values.append([i+j for j in range(num_gpus)] * num_workers)
-
-    with context.graph_mode(), self.cached_session() as sess:
-      # `expected_input_pipeline_id` is None because the input_fn will be called
-      # multiple times, each with a different input_pipeline_id.
-      input_fn = self._input_fn_to_test_input_context(
-          fn,
-          expected_num_replicas_in_sync=num_workers*num_gpus,
-          expected_num_input_pipelines=num_workers,
-          expected_input_pipeline_id=None)
-      iterator = distribution.make_input_fn_iterator(input_fn)
-      self._test_input_fn_iterator(
-          iterator, distribution.extended.worker_devices, expected_values, sess,
-          test_reinitialize=False, ignore_order=True)
+    self._testMakeInputFnIteratorWithCallable(distribution)
 
 
 class MultiWorkerMirroredStrategyTestWithChief(
@@ -1346,10 +1339,77 @@ class MirroredVariableStopGradientTest(test.TestCase, parameterized.TestCase):
       self.assertIsNone(grads[0])
 
 
+@combinations.generate(
+    combinations.combine(
+        distribution=[
+            strategy_combinations.mirrored_strategy_with_gpu_and_cpu,
+        ],
+        mode=["eager"]))
+class FunctionTest(test.TestCase, parameterized.TestCase):
+
+  def testBackwardFunctionDevicePlacement(self, distribution):
+    with distribution.scope():
+      w = variable_scope.variable([1.5], name="w")
+      b = variable_scope.variable([0.5], name="b")
+
+    @def_function.function
+    def forward(x, w, b):
+      return x * w + b
+
+    x = array_ops.identity([1.0], name="x_useless")
+    concrete_forward = forward.get_concrete_function(x, w._primary, b._primary)
+
+    with distribution.scope():
+
+      def replica_fn():
+        with backprop.GradientTape() as t:
+          x = array_ops.identity([1.0], name="x")
+          loss = concrete_forward(x, w._get(), b._get()) - [1.0]
+          return t.gradient(loss, [w, b])
+
+      def step_fn():
+        return distribution.experimental_run_v2(replica_fn)
+
+      context.enable_run_metadata()
+      g1, g2 = step_fn()
+      run_metadata = context.export_run_metadata()
+      context.disable_run_metadata()
+      self.assertEqual(self.evaluate(g1._primary), 1.0)
+      self.assertEqual(self.evaluate(g2._primary), 1.0)
+
+      # Verify that this node runs on both devices.
+      node_name = "gradients_mul_grad_mul_1_x"
+      devices_for_this_node = set()
+      for partition_graph in run_metadata.partition_graphs:
+        for node in partition_graph.node:
+          if node.name == node_name:
+            devices_for_this_node.add(node.device)
+      devices = [device_util.resolve("/device:GPU:0"),
+                 device_util.resolve("/device:CPU:0")]
+      self.assertSetEqual(devices_for_this_node, set(devices))
+
+  def testFuctionPreservesAutoGraph(self, distribution):
+    def f():
+      self.assertTrue(converter_testing.is_inside_generated_code())
+      return 1
+
+    with distribution.scope():
+
+      @def_function.function
+      def replica_fn():
+        return f()
+
+      distribution.experimental_run_v2(replica_fn)
+
+
 def _replica_id():
   replica_id = ds_context.get_replica_context().replica_id_in_sync_group
   if not isinstance(replica_id, ops.Tensor):
     replica_id = constant_op.constant(replica_id)
+  # TODO(b/149852830): Workaround for small Tensor caching (which is only on
+  # CPU) to ensure the value is on the correct device.
+  replica_id = math_ops.cast(replica_id, dtypes.float32)
+  replica_id = math_ops.cast(replica_id, dtypes.int32)
   return replica_id
 
 

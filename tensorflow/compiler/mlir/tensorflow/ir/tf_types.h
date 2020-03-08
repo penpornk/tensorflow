@@ -18,13 +18,53 @@ limitations under the License.
 #ifndef TENSORFLOW_COMPILER_MLIR_TENSORFLOW_IR_TF_TYPES_H_
 #define TENSORFLOW_COMPILER_MLIR_TENSORFLOW_IR_TF_TYPES_H_
 
-#include "mlir/IR/Diagnostics.h"  // TF:local_config_mlir
-#include "mlir/IR/Location.h"  // TF:local_config_mlir
-#include "mlir/IR/StandardTypes.h"  // TF:local_config_mlir
-#include "mlir/IR/Types.h"  // TF:local_config_mlir
+#include "mlir/IR/Diagnostics.h"  // TF:llvm-project
+#include "mlir/IR/Location.h"  // TF:llvm-project
+#include "mlir/IR/Operation.h"  // TF:llvm-project
+#include "mlir/IR/StandardTypes.h"  // TF:llvm-project
+#include "mlir/IR/Types.h"  // TF:llvm-project
 
 namespace mlir {
 namespace TF {
+//===----------------------------------------------------------------------===//
+// Utility iterators
+//===----------------------------------------------------------------------===//
+
+// An iterator for the tensor shapes of an op's operands of shaped types.
+// Returns llvm::None if a operand is unranked; returns ArrayRef<int64_t> as the
+// shape otherwise.
+class OperandShapeIterator final
+    : public llvm::mapped_iterator<Operation::operand_iterator,
+                                   llvm::Optional<ArrayRef<int64_t>> (*)(
+                                       Value)> {
+ public:
+  using reference = llvm::Optional<ArrayRef<int64_t>>;
+
+  /// Initializes the operand shape iterator to the specified operand iterator.
+  explicit OperandShapeIterator(Operation::operand_iterator it);
+};
+
+using OperandShapeRange = iterator_range<OperandShapeIterator>;
+
+// An iterator for the tensor shapes of an op's results of shaped types.
+// Returns llvm::None if a result is unranked; returns ArrayRef<int64_t> as the
+// shape otherwise.
+class ResultShapeIterator final
+    : public llvm::mapped_iterator<Operation::result_iterator,
+                                   llvm::Optional<ArrayRef<int64_t>> (*)(
+                                       Value)> {
+ public:
+  using reference = llvm::Optional<ArrayRef<int64_t>>;
+
+  /// Initializes the result shape iterator to the specified result iterator.
+  explicit ResultShapeIterator(Operation::result_iterator it);
+};
+
+using ResultShapeRange = iterator_range<ResultShapeIterator>;
+
+//===----------------------------------------------------------------------===//
+// TensorFlow types
+//===----------------------------------------------------------------------===//
 
 namespace TensorFlowTypes {
 // List of supported TensorFlowType kinds, necessary for isa/dyn_cast.
@@ -50,8 +90,8 @@ class TensorFlowType : public Type {
 
 // Returns true if the specified type is a valid TensorFlow element type.
 static inline bool IsValidTFElementType(Type type) {
-  return type.isa<FloatType>() || type.isa<IntegerType>() ||
-         type.isa<TensorFlowType>();
+  return type.isa<ComplexType>() || type.isa<FloatType>() ||
+         type.isa<IntegerType>() || type.isa<TensorFlowType>();
 }
 
 // Returns true if this is a valid TensorFlow tensor type.
@@ -101,20 +141,16 @@ class TensorFlowRefType : public TensorFlowType {
   static TensorFlowType get(Type type);
   static TensorFlowType getChecked(Type type, MLIRContext* context,
                                    Location loc) {
-    if (failed(verifyConstructionInvariants(loc, context, type))) {
+    if (failed(verifyConstructionInvariants(loc, type))) {
       return TensorFlowRefType();
     }
     return get(type);
   }
 
-  static LogicalResult verifyConstructionInvariants(
-      llvm::Optional<Location> loc, MLIRContext* context, Type type) {
+  static LogicalResult verifyConstructionInvariants(Location loc, Type type) {
     // type should be a valid TensorFlow type.
     if (!IsValidTFTensorType(type)) {
-      if (loc) {
-        emitError(*loc) << "invalid TensorFlow type: " << type;
-      }
-      return failure();
+      return emitError(loc) << "invalid TensorFlow type: " << type;
     }
     return success();
   }
@@ -123,6 +159,12 @@ class TensorFlowRefType : public TensorFlowType {
   // type.
   Type RemoveRef();
 };
+
+// Returns the corresponding TensorFlow or standard type from TensorFlowRef
+// type.
+static inline Type GetDefaultTypeOf(TensorFlowRefType type) {
+  return type.RemoveRef();
+}
 
 #define HANDLE_TF_TYPE(tftype, enumerant, name)                          \
   class tftype##Type : public detail::TensorFlowTypeImpl<tftype##Type> { \
@@ -171,11 +213,11 @@ class TypeWithSubtypeStorage : public TypeStorage {
 //   - `static std::string getTypeName()` that returns the name of the type for
 //     verification logging.
 template <typename Derived>
-class TypeWithSubtype
+class TypeWithSubtypeImpl
     : public Type::TypeBase<Derived, TensorFlowType, TypeWithSubtypeStorage> {
  public:
   using Base = Type::TypeBase<Derived, TensorFlowType, TypeWithSubtypeStorage>;
-  using TFBase = TypeWithSubtype<Derived>;
+  using TFBase = TypeWithSubtypeImpl<Derived>;
   using Base::Base;
 
   static Derived get(ArrayRef<TensorType> subtypes, MLIRContext* context) {
@@ -184,7 +226,7 @@ class TypeWithSubtype
 
   static Derived getChecked(ArrayRef<TensorType> subtypes, MLIRContext* context,
                             Location loc) {
-    return Base::getChecked(loc, context, Derived::getTypeKind(), subtypes);
+    return Base::getChecked(loc, Derived::getTypeKind(), subtypes);
   }
 
   static Derived get(MLIRContext* context) { return get({}, context); }
@@ -193,16 +235,12 @@ class TypeWithSubtype
   static bool kindof(unsigned kind) { return kind == Derived::getTypeKind(); }
 
   static LogicalResult verifyConstructionInvariants(
-      llvm::Optional<Location> loc, MLIRContext* context,
-      ArrayRef<TensorType> subtypes) {
+      Location loc, ArrayRef<TensorType> subtypes) {
     // Each of the subtypes should be a valid TensorFlow type.
     for (TensorType subtype : subtypes) {
       if (!IsValidTFTensorType(subtype)) {
-        if (loc) {
-          emitError(*loc) << "invalid " << Derived::getTypeName()
-                          << " subtype: " << subtype;
-        }
-        return failure();
+        return emitError(loc) << "invalid " << Derived::getTypeName()
+                              << " subtype: " << subtype;
       }
     }
     return success();
@@ -212,11 +250,33 @@ class TypeWithSubtype
 };
 }  // namespace detail
 
+// TensorFlowTypeWithSubtype class supports all the types with subtypes in
+// TensorFlow dialect.
+class TensorFlowTypeWithSubtype : public TensorFlowType {
+ public:
+  using TensorFlowType::TensorFlowType;
+
+  // Checks if a type is TensorFlow type with subtypes.
+  static bool classof(Type type) {
+    return type.getKind() == TensorFlowTypes::VARIANT ||
+           type.getKind() == TensorFlowTypes::RESOURCE;
+  }
+
+  // Converts a TypeWithSubtype type to the same type but without its subtypes.
+  Type RemoveSubtypes();
+};
+
+// Returns the corresponding TensorFlow type with subtypes but without its
+// subtypes.
+static inline Type GetDefaultTypeOf(TensorFlowTypeWithSubtype type) {
+  return type.RemoveSubtypes();
+}
+
 // TensorFlow resource type is used to support TensorFlow resource variables,
 // which represent shared, persistent state manipulated by a TensorFlow program.
 // ResourceType stores shape and datatype for subtypes unlike most other data
 // types that don't have any associated information.
-class ResourceType : public detail::TypeWithSubtype<ResourceType> {
+class ResourceType : public detail::TypeWithSubtypeImpl<ResourceType> {
  public:
   using TFBase::TFBase;
   static unsigned getTypeKind() { return TensorFlowTypes::RESOURCE; }
@@ -228,7 +288,7 @@ class ResourceType : public detail::TypeWithSubtype<ResourceType> {
 // data types that don't have any associated information. For example, variants
 // encoding TensorList type stores the common shape and dtype of the list
 // elements as the only subtype.
-class VariantType : public detail::TypeWithSubtype<VariantType> {
+class VariantType : public detail::TypeWithSubtypeImpl<VariantType> {
  public:
   using TFBase::TFBase;
   static unsigned getTypeKind() { return TensorFlowTypes::VARIANT; }

@@ -47,7 +47,7 @@ namespace xla {
 // The following types are used for ahead of time compilation.
 
 // Contains the object file data created as a result of ahead-of-time
-// compuation.
+// computation.
 using ObjectFileData = std::vector<char>;
 
 // Abstract superclass describing the result of an ahead-of-time compilation.
@@ -72,6 +72,9 @@ class AotCompilationOptions {
 
   // Returns the ID of the platform to which these options apply.
   virtual se::Platform::Id PlatformId() const = 0;
+
+  virtual int64 replica_count() const { return 0; }
+  virtual int64 num_cores() const { return 0; }
 
   // Optional allocator that may be used for allocating temp space on the device
   // during compilation.

@@ -229,7 +229,7 @@ TEST(MathOpsTest, Select_ShapeFn) {
   auto run_inference_for_handles = [&]() -> Status {
     CHECK(op_reg_data->shape_inference_fn != nullptr);
     c.reset(new shape_inference::InferenceContext(
-        TF_GRAPH_DEF_VERSION, &op.node_def, op_reg_data->op_def,
+        TF_GRAPH_DEF_VERSION, op.node_def, op_reg_data->op_def,
         {PartialTensorShape(), PartialTensorShape(), PartialTensorShape()}, {},
         {}, handle_data));
     TF_CHECK_OK(c->construction_status());
@@ -592,5 +592,16 @@ TEST(MathOpsTest, Bincount_ShapeFn) {
   INFER_OK(op, "?;[];?", "[?]");
   INFER_OK(op, "[?];[];?", "[?]");
   INFER_OK(op, "[?];[];[?]", "[?]");
+}
+
+TEST(MathOpsTest, SobolSample) {
+  ShapeInferenceTestOp op("SobolSample");
+
+  // All inputs should be scalar.
+  INFER_ERROR("must be rank 0", op, "[1];?;?");
+  INFER_ERROR("must be rank 0", op, "?;[1];?");
+  INFER_ERROR("must be rank 0", op, "?;?;[1]");
+
+  INFER_OK(op, "[];[];[]", "[?,?]");
 }
 }  // end namespace tensorflow

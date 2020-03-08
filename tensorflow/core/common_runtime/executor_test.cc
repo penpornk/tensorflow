@@ -61,11 +61,12 @@ class ExecutorTest : public ::testing::Test {
     const int version = graph->versions().producer();
     LocalExecutorParams params;
     params.device = device_.get();
-    params.create_kernel = [this, version](const NodeDef& ndef,
-                                           OpKernel** kernel) {
-      return CreateNonCachedKernel(device_.get(), nullptr, ndef, version,
-                                   kernel);
-    };
+    params.create_kernel =
+        [this, version](const std::shared_ptr<const NodeProperties>& props,
+                        OpKernel** kernel) {
+          return CreateNonCachedKernel(device_.get(), nullptr, props, version,
+                                       kernel);
+        };
     params.delete_kernel = [](OpKernel* kernel) {
       DeleteNonCachedKernel(kernel);
     };
@@ -254,7 +255,7 @@ void BuildConcurrentAddAssign(Graph* g) {
   auto one = test::graph::Constant(g, V(1.0));
   // A variable holds one float.
   auto var = test::graph::Var(g, DT_FLOAT, TensorShape({}));
-  // Initilize the variable with 1.0.
+  // Initialize the variable with 1.0.
   auto init = test::graph::Assign(g, var, one);
   // Output
   auto out = test::graph::Send(g, var, "out", ALICE, kIncarnation, BOB);
@@ -479,12 +480,18 @@ static void BM_FeedInputFetchOutput(int iters) {
   Node* y = test::graph::Recv(g, "y", "float", ALICE, 1, BOB);
   Node* sum = test::graph::Add(g, x, y);
   Node* z = test::graph::Send(g, sum, "z", BOB, 1, ALICE);
+
+  string x_key = test::GetRendezvousKey(x);
+  string y_key = test::GetRendezvousKey(y);
+  string z_key = test::GetRendezvousKey(z);
+
   Tensor val(DT_FLOAT, TensorShape({}));
   val.scalar<float>()() = 3.14;
 #ifdef PLATFORM_GOOGLE
   SetBenchmarkItemsProcessed(static_cast<int64>(iters));
 #endif  // PLATFORM_GOOGLE
-  test::Benchmark("cpu", g).RunWithArgs({{x, val}, {y, val}}, {z}, iters);
+  test::Benchmark("cpu", g).RunWithRendezvousArgs({{x_key, val}, {y_key, val}},
+                                                  {z_key}, iters);
 }
 BENCHMARK(BM_FeedInputFetchOutput);
 

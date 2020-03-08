@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#if GOOGLE_CUDA
+#if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 
 #include "tensorflow/core/common_runtime/gpu/gpu_event_mgr.h"
 
@@ -441,7 +441,6 @@ class EMBenchmarkHelper {
 
     params->step_container = nullptr;
     params->slice_reader_cache = nullptr;
-    params->input_device_contexts = nullptr;
     params->resource_manager = gpu_helper_->gpu()->resource_manager();
 
     params->stats_collector = nullptr;
@@ -860,4 +859,4 @@ BENCHMARK(BM_chain_1M_100_true)->Arg(8);
 }  // namespace
 }  // namespace tensorflow
 
-#endif  // GOOGLE_CUDA
+#endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM

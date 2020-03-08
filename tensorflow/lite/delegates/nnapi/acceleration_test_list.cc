@@ -56,6 +56,9 @@ FloatActivationsOpTest/PRelu,29
 LogisticOpTest/LogisticOpTest/Sigmoid(.+nt8)?/\d+
 LogisticOpTest/LogisticOpTest/Sigmoid/\d+
 TanhOpTest/TanhOpTest/Tanh(.+nt8)?/\d+,29
+FloatActivationsOpTest/HardSwish
+QuantizedActivationsOpTest/HardSwish
+QuantizedActivationsOpTest/HardSwishBias
 
 # add_test
 FloatAddOpModel/.+
@@ -140,6 +143,11 @@ ConvolutionOpTest/ConvolutionOpTest/.+/\d+
 
 # dequantize_test
 DequantizeOpTest/Uint8
+
+# depth_to_space_test
+DepthToSpaceOpModel/Float32
+DepthToSpaceOpModel/UInt8
+DepthToSpaceOpModel/int8
 
 # div_test
 FloatDivOpTest/.+
@@ -226,8 +234,7 @@ CifgPeepholeNoProjectionNoClippingUnidirectionalLstmTest/NonLayerNormLstmBlackBo
 
 # maximum_minimum_test
 MaxMinOpTest/.+nt8Test,29
-MaximumOpTest/+.
-MaxMinOpTest/.+
+MaximumOpTest/.+,29
 
 # mul_test
 FloatMulOpTest/.+
@@ -280,6 +287,7 @@ ConstFloat(Sum|Prod|Max|Min)OpTest/NotKeepDims,29
 ConstFloat(Sum|Prod|Max|Min)OpTest/KeepDims,29
 ConstFloat(Mean|Any)OpTest/NotKeepDims
 ConstFloat(Mean|Any)OpTest/KeepDims
+ConstFloat(Sum|Prod|Max|Min)OpTest/ScalarAxis,29
 
 # reshape_test
 # Acceleration would be only for the test with shape being a constant tensor
@@ -326,6 +334,7 @@ SplitOpTest/SplitOpTest/.+/0,29
 FloatSqueezeOpTest/.+,29
 
 # sub_test
+-FloatSubOpModel/WithBroadcast5D
 FloatSubOpModel/.+
 -QuantizedSubOpModel/.+Int16
 -QuantizedSubOpModel/.+Int8
