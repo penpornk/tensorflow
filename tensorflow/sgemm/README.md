@@ -1,21 +1,13 @@
-To run the sgemm benchmark with MKL-DNN v0.20.3 (the current default):
+This microbenchmark compares sgemm from MKL-DNN v0.21.3 with DNNL v1.2. To run:
 ```
 git clone https://github.com/penpornk/tensorflow
 cd tensorflow; git checkout sgemm
 yes "" | ./configure
 cd tensorflow/sgemm
-bazel build --config=opt :sgemm
 ./benchmark.sh
 ```
 
-To try with MKL-DNN v0.18 or v0.20.4, rename the appropriate `tf_http_archive` in
-`${TENSORFLOW_ROOT}/tensorflow/workspace.bzl` to `mkl_dnn` (and rename the current `mkl_dnn` in line 136 to something else).
-* v0.18: change line 149
-* v0.20.4: change line 162
+The results are in results.csv. By default, the script reports median and
+standard deviation from 5 runs.
 
-Then, run
-```
-cd ${TENSORFLOW_ROOT}/tensorflow/sgemm
-bazel build --config=opt :sgemm
-./benchmark.sh
-```
+The number of trials and sizes of `M`, `N`, and `K` can be adjusted in benchmark.sh.

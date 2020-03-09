@@ -1,6 +1,10 @@
 exports_files(["LICENSE"])
 
 load(
+    "@org_tensorflow//third_party/mkl:build_defs.bzl",
+    "if_mkl",
+)
+load(
     "@org_tensorflow//third_party/mkl_dnn:build_defs.bzl",
     "if_mkl_open_source_only",
     "if_mkl_v1_open_source_only",
@@ -18,15 +22,26 @@ config_setting(
     },
 )
 
+_DNNL_RUNTIME_OMP = {
+    "#cmakedefine DNNL_CPU_THREADING_RUNTIME DNNL_RUNTIME_${DNNL_CPU_THREADING_RUNTIME}": "#define DNNL_CPU_THREADING_RUNTIME DNNL_RUNTIME_OMP",
+    "#cmakedefine DNNL_CPU_RUNTIME DNNL_RUNTIME_${DNNL_CPU_RUNTIME}": "#define DNNL_CPU_RUNTIME DNNL_RUNTIME_OMP",
+    "#cmakedefine DNNL_GPU_RUNTIME DNNL_RUNTIME_${DNNL_GPU_RUNTIME}": "#define DNNL_GPU_RUNTIME DNNL_RUNTIME_NONE",
+}
+
+_DNNL_RUNTIME_SEQ = {
+    "#cmakedefine DNNL_CPU_THREADING_RUNTIME DNNL_RUNTIME_${DNNL_CPU_THREADING_RUNTIME}": "#define DNNL_CPU_THREADING_RUNTIME DNNL_RUNTIME_SEQ",
+    "#cmakedefine DNNL_CPU_RUNTIME DNNL_RUNTIME_${DNNL_CPU_RUNTIME}": "#define DNNL_CPU_RUNTIME DNNL_RUNTIME_SEQ",
+    "#cmakedefine DNNL_GPU_RUNTIME DNNL_RUNTIME_${DNNL_GPU_RUNTIME}": "#define DNNL_GPU_RUNTIME DNNL_RUNTIME_NONE",
+}
+
 template_rule(
     name = "dnnl_config_h",
     src = "include/dnnl_config.h.in",
     out = "include/dnnl_config.h",
-    substitutions = {
-        "#cmakedefine DNNL_CPU_THREADING_RUNTIME DNNL_RUNTIME_${DNNL_CPU_THREADING_RUNTIME}": "#define DNNL_CPU_THREADING_RUNTIME DNNL_RUNTIME_OMP",
-        "#cmakedefine DNNL_CPU_RUNTIME DNNL_RUNTIME_${DNNL_CPU_RUNTIME}": "#define DNNL_CPU_RUNTIME DNNL_RUNTIME_OMP",
-        "#cmakedefine DNNL_GPU_RUNTIME DNNL_RUNTIME_${DNNL_GPU_RUNTIME}": "#define DNNL_GPU_RUNTIME DNNL_RUNTIME_NONE",
-    },
+    substitutions = if_mkl(
+        _DNNL_RUNTIME_OMP,
+        if_false = _DNNL_RUNTIME_SEQ,
+    ),
 )
 
 # Create the file mkldnn_version.h with MKL-DNN version numbers.
@@ -109,28 +124,41 @@ cc_library(
 )
 
 cc_library(
-    name = "mkldnn_single_threaded",
+    name = "dnnl_single_threaded",
     srcs = glob([
         "src/common/*.cpp",
-        "src/common/*.hpp",
         "src/cpu/*.cpp",
-        "src/cpu/*.hpp",
+        "src/cpu/**/*.c",
         "src/cpu/**/*.cpp",
-        "src/cpu/**/*.hpp",
-        "src/cpu/xbyak/*.h",
-    ]) + [":dnnl_config_h"],
-    hdrs = glob(["include/*"]),
+    ]) + [
+        ":dnnl_config_h",
+        ":dnnl_version_h",
+    ],
     copts = [
         "-fexceptions",
-        "-DMKLDNN_THR=MKLDNN_THR_SEQ",  # Disables threading.
     ],
+    linkopts = ["-ldl"],
     includes = [
         "include",
         "src",
         "src/common",
         "src/cpu",
         "src/cpu/gemm",
+        "src/cpu/gemm/bf16",
+        "src/cpu/gemm/f32",
+        "src/cpu/gemm/s8x8s32",
+        "src/cpu/jit_utils",
+        "src/cpu/rnn",
         "src/cpu/xbyak",
     ],
+    textual_hdrs = glob([
+        "include/*",
+        "src/common/*.hpp",
+        "src/cpu/*.hpp",
+        "src/cpu/**/*.h",
+        "src/cpu/**/*.hpp",
+        "src/cpu/xbyak/*.h",
+    ]),
     visibility = ["//visibility:public"],
 )
+
