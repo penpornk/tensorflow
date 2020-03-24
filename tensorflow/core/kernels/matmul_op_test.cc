@@ -385,6 +385,9 @@ static Graph* Matmul(int m, int k, int n, bool transpose_a, bool transpose_b,
 
 #endif  // GOOGLE_CUDA
 
+BM_Matmul(1024, 1024, 1024, false, false);
+
+/* Commenting out other benchmarks to save time
 // Batch size of 1 included for inference.
 // Typical fully connected layers
 BM_Matmul(1, 512, 512, false, false);
@@ -458,5 +461,7 @@ BM_Matmul(2000, 1, 2000, false, false);
 BM_Matmul(2000, 1, 2000, true, false);
 BM_Matmul(2000, 1, 2000, false, true);
 BM_Matmul(2000, 1, 2000, true, true);
+
+*/
 
 }  // end namespace tensorflow

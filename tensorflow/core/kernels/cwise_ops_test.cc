@@ -52,6 +52,7 @@ int ColsFromArg(int arg) { return (arg % kRows); }
   }                                                                  \
   BENCHMARK(BM_##DEVICE##_##FUNC##_##TYPE)->Range(4 << 10, 1 << 20);
 
+/* Commenting out irrelevant tests to save time
 BM_UNARY(cpu, Floor, float, DT_FLOAT);
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 BM_UNARY(gpu, Floor, float, DT_FLOAT);
@@ -94,6 +95,7 @@ BM_UNARY(cpu, Round, float, DT_FLOAT);
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 BM_UNARY(gpu, Round, float, DT_FLOAT);
 #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+*/
 
 // data func scalar.
 Graph* BinaryScalar(int num, const string& func) {
@@ -130,6 +132,9 @@ Graph* BinaryScalar(int num, const string& func) {
       ->Arg(1 << 19)                                               \
       ->Arg(1 << 20);
 
+BM_BINARY_SCALAR(cpu, Mul);
+
+/* Commenting out irrelevant tests to save time
 BM_BINARY_SCALAR(cpu, Less);
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 BM_BINARY_SCALAR(gpu, Less);
@@ -153,6 +158,7 @@ BM_BINARY_SCALAR(gpu, DivNoNan);
 #ifdef TENSORFLOW_USE_SYCL
 BM_BINARY_SCALAR(sycl, DivNoNan);
 #endif  // TENSORFLOW_USE_SYCL
+*/
 
 #undef BM_BINARY_SCALAR
 
@@ -201,6 +207,7 @@ Graph* CubeWithMulSquare(int num) {
       ->Arg(1 << 16)                                   \
       ->Arg(1 << 20);
 
+/* Commenting out irrelevant tests to save time
 BM_CUBE(cpu, CubeWithPow3);
 BM_CUBE(cpu, CubeWithTwoMuls);
 BM_CUBE(cpu, CubeWithMulSquare);
@@ -214,6 +221,7 @@ BM_CUBE(sycl, CubeWithPow3);
 BM_CUBE(sycl, CubeWithTwoMuls);
 BM_CUBE(sycl, CubeWithMulSquare);
 #endif  // TENSORFLOW_USE_SYCL
+*/
 
 #undef BM_CUBE
 
@@ -250,6 +258,7 @@ Graph* BiasAdd(int rows, int cols, DataType type) {
   BM_BIAS_ADD(DEVICE, C_TYPE, TF_TYPE, 2048, 512); \
   BM_BIAS_ADD(DEVICE, C_TYPE, TF_TYPE, 4096, 512);
 
+/* Commenting out irrelevant tests to save time
 using Eigen::half;
 BM_BIAS_ADD_ALL(cpu, float, DT_FLOAT);
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
@@ -259,6 +268,7 @@ BM_BIAS_ADD_ALL(cpu, half, DT_HALF);
 #if GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 BM_BIAS_ADD_ALL(gpu, half, DT_HALF);
 #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
+*/
 #undef BM_BIAS_ADD_ALL
 #undef BM_BIAS_ADD
 
@@ -282,6 +292,7 @@ Graph* BiasAddGrad(int rows, int cols, int channels, DataType type,
   return g;
 }
 
+/* Commenting out irrelevant tests to save time
 #define BM_BIAS_ADD_GRAD(DEVICE, FMT, C_TYPE, TF_TYPE, R, C, CH)               \
   void BM_##DEVICE##_##FMT##_##C_TYPE##_BiasAddGrad_R##R##_C##C##_CH##CH(      \
       int iters, int arg, int channels) {                                      \
@@ -320,6 +331,7 @@ BM_BIAS_ADD_GRAD_ALL(gpu, NHWC, half, DT_HALF);
 #endif  // GOOGLE_CUDA || TENSORFLOW_USE_ROCM
 #undef BM_BIAS_ADD_GRAD_ALL
 #undef BM_BIAS_ADD_GRAD
+*/
 
 Graph* BcastAdd(int rows, int cols, int dim) {
   Graph* g = new Graph(OpRegistry::Global());
@@ -346,6 +358,7 @@ Graph* BcastAdd(int rows, int cols, int dim) {
   return g;
 }
 
+/* Commenting out irrelevant tests to save time
 #define BM_BCAST_ADD_ROW(DEVICE, R, C)                             \
   void BM_##DEVICE##_BcastAddRow_R##R##_C##C(int iters, int arg) { \
     const int rows = RowsFromArg(arg);                             \
@@ -455,6 +468,6 @@ BM_BCAST_ADD_CROSS_CR_ALL(sycl);
 #endif  // TENSORFLOW_USE_SYCL
 #undef BM_BCAST_ADD_CROSS_CR_ALL
 #undef BM_BCAST_ADD_CROSS_CR
-
+*/
 }  // namespace
 }  // namespace tensorflow
