@@ -1,4 +1,4 @@
-dot_avx:	dot.cc
+mul_avx:	cwise_mul.cc
 		g++ -o $@ -mavx -O3 -std=c++11 $<
-dot_avx512:	dot.cc
+mul_avx512:	cwise_mul.cc
 		g++ -o $@ -mavx512f -O3 -std=c++11 $<
