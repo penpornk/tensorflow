@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+# pylint: disable=line-too-long
 """Library for running a computation across multiple devices.
 
 See the guide for overview and examples:
 [TensorFlow v2.x](https://www.tensorflow.org/guide/distributed_training),
-[TensorFlow v1.x](https://github.com/tensorflow/docs/blob/master/site/en/r1/guide/distribute_strategy.ipynb).  # pylint: disable=line-too-long
+[TensorFlow v1.x](https://github.com/tensorflow/docs/blob/master/site/en/r1/guide/distribute_strategy.ipynb).
 
 The intent of this library is that you can write an algorithm in a stylized way
 and it will be usable with a variety of different `tf.distribute.Strategy`
@@ -1580,7 +1581,7 @@ class StrategyExtendedV2(object):
   * Unwrapping and merging: Consider calling a function `fn` on multiple
     replicas, like `run(fn, args=[w])` with an
     argument `w` that is a wrapped value. This means `w` will have a map taking
-    replica id `0` to `w0`, replica id `11` to `w1`, etc.
+    replica id `0` to `w0`, replica id `1` to `w1`, etc.
     `run()` unwraps `w` before calling `fn`, so
     it calls `fn(w0)` on `d0`, `fn(w1)` on `d1`, etc.  It then merges the return
     values from `fn()`, which can possibly result in wrapped values. For

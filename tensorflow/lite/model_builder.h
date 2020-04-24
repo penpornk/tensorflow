@@ -21,12 +21,13 @@ limitations under the License.
 
 #include <memory>
 
+#include "tensorflow/lite/allocation.h"
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/core/api/error_reporter.h"
 #include "tensorflow/lite/core/api/op_resolver.h"
-#include "tensorflow/lite/interpreter.h"
 #include "tensorflow/lite/mutable_op_resolver.h"
 #include "tensorflow/lite/schema/schema_generated.h"
+#include "tensorflow/lite/stderr_reporter.h"
 
 namespace tflite {
 
@@ -144,7 +145,7 @@ class FlatBufferModel {
   // lower-bound; ops in the graph may not have an associated runtime version,
   // in which case the actual required runtime might be greater than the
   // reported minimum.
-  string GetMinimumRuntime() const;
+  std::string GetMinimumRuntime() const;
 
   /// Returns true if the model identifier is correct (otherwise false and
   /// reports an error).

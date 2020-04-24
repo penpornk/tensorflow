@@ -83,6 +83,7 @@ FRAMEWORK_LIB_HDRS = [
 cc_library(
     name = "version",
     hdrs = ["version.h"],
+    build_for_embedded = True,
     copts = TFLITE_DEFAULT_COPTS,
     # Note that we only use the header defines from :version_lib.
     deps = ["//tensorflow/core:version_lib"],
@@ -135,6 +136,7 @@ cc_library(
     name = "external_cpu_backend_context",
     srcs = ["external_cpu_backend_context.cc"],
     hdrs = ["external_cpu_backend_context.h"],
+    build_for_embedded = True,
     copts = TFLITE_DEFAULT_COPTS,
     deps = [
         "//tensorflow/lite/c:common",
@@ -312,10 +314,12 @@ cc_library(
     name = "tflite_with_xnnpack",
     srcs = ["tflite_with_xnnpack.cc"],
     copts = tflite_copts() + TFLITE_DEFAULT_COPTS,
+    linkstatic = True,
     deps = [
         "//tensorflow/lite/c:common",
         "//tensorflow/lite/delegates/xnnpack:xnnpack_delegate",
     ],
+    alwayslink = 1,
 )
 
 cc_test(
@@ -464,13 +468,8 @@ cc_test(
         ":framework",
         ":tflite_with_xnnpack",
         ":util",
-        ":version",
         "//tensorflow/lite/c:common",
-        "//tensorflow/lite/core/api",
-        "//tensorflow/lite/delegates/xnnpack:xnnpack_delegate",
         "//tensorflow/lite/kernels:builtin_ops",
-        "//tensorflow/lite/profiling:platform_profiler",
-        "//tensorflow/lite/schema:schema_fbs",
         "//tensorflow/lite/testing:util",
         "@com_google_googletest//:gtest",
     ],
