@@ -25,7 +25,65 @@ def HLO_Pred : TypeAlias<I1, "pred (AKA boolean or 1-bit integer)">;
 // smaller rank shape is broadcast into a larger rank shape. For example,
 // given a 2x3x4 cuboid and a 3x4 matrix, a broadcasting tuple (1,2) means
 // matching the matrix to dimensions 1 and 2 of the cuboid.
-def BroadcastDimAttr : OptionalAttr<I64ElementsAttr>;
+defvar BroadcastDimAttr = I64ElementsAttr;
+
+//===----------------------------------------------------------------------===//
+// XLA on tensors type definitions.
+//===----------------------------------------------------------------------===//
+
+// Token type.
+def HLO_Token : Type<CPred<"$_self.isa<TokenType>()">, "token">;
+
+// Any integer tensor types
+def HLO_IntTensor : TensorOf<[HLO_Int]>;
+
+// Any integer tensor type with rank 0 (i.e. representing a single integer).
+def HLO_ScalarIntTensor : ShapedContainerType<
+  [HLO_Int], And<[IsTensorTypePred, HasAnyRankOfPred<[0]>]>,
+  "a 0-dim integer tensor">;
+
+// Any floating-point tensor types
+def HLO_FpTensor : TensorOf<[AnyFloat]>;
+
+def HLO_PredTensor : TensorOf<[HLO_Pred]>;
+
+def HLO_Tensor : TensorOf<[AnyFloat, AnySignlessInteger, AnyComplex]>;
+
+def HLO_ComplexTensor : TensorOf<[AnyComplex]>;
+
+def HLO_Tuple : NestedTupleOf<[HLO_Tensor, HLO_Token]>;
+
+def HLO_TensorOrTuple : AnyTypeOf<[HLO_Tensor, HLO_Tuple]>;
+
+// Dynamic representation of a shape vector as a tensor.
+def HLO_DimensionTensor : ShapedContainerType<
+    [Index, AnySignlessInteger],
+    And<[IsTensorTypePred, HasAnyRankOfPred<[1]>]>,
+    "a 1D tensor of dimensions">;
+
+// In general, static shaped tensor constraints should be avoided unless
+// it is for a legacy op which is only correct with static shapes.
+def HLO_StaticShapeTensor : StaticShapeTensorOf<[
+      AnyFloat, AnySignlessInteger, AnyComplex]>;
+
+//===----------------------------------------------------------------------===//
+// XLA on tensors combined type definitions.
+//===----------------------------------------------------------------------===//
+
+// Any integer or floating-point tensor types
+def HLO_IntOrFpTensor : TensorOf<[HLO_Int, AnyFloat]>;
+
+// Any integer or predicate tensor types
+def HLO_PredOrIntTensor : TensorOf<[HLO_Pred, HLO_Int]>;
+
+// Any floating-point or complex tensor types
+def HLO_FpOrComplexTensor : TensorOf<[AnyFloat, AnyComplex]>;
+
+// Any int, floating-point or complex tensor types
+def HLO_IntFpOrComplexTensor : TensorOf<[HLO_Int, AnyFloat, AnyComplex]>;
+
+// Any pred, int or floating-point tensor types
+def HLO_PredIntOrFpTensor : TensorOf<[HLO_Pred, HLO_Int, AnyFloat]>;
 
 //===----------------------------------------------------------------------===//
 // XLA nullary op definitions.
@@ -459,7 +517,7 @@ class BASE_HLO_AndOp {
   string summary = "Logical and";
 
   string description = [{
-    Returns `lhs /\ rhs` element-wise.
+    Returns `logical_and(lhs, rhs)` element-wise.
 
     See
     https://www.tensorflow.org/xla/operation_semantics#element-wise_binary_arithmetic_operations.
@@ -470,7 +528,7 @@ class BASE_HLO_OrOp {
   string summary = "Logical or";
 
   string description = [{
-    Returns `lhs \/ rhs` element-wise.
+    Returns `logical_or(lhs, rhs)` element-wise.
 
     See
     https://www.tensorflow.org/xla/operation_semantics#element-wise_binary_arithmetic_operations.
@@ -481,7 +539,7 @@ class BASE_HLO_XorOp {
   string summary = "Logical xor";
 
   string description = [{
-    Returns `lhs xor rhs` element-wise.
+    Returns `logical_xor(lhs, rhs)` element-wise.
 
     See
     https://www.tensorflow.org/xla/operation_semantics#element-wise_binary_arithmetic_operations.

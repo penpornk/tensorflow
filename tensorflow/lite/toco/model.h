@@ -234,6 +234,7 @@ enum class ArrayDataType : uint8 {
   kString,
   kComplex64,
   kFloat16,
+  kFloat64,
 };
 
 // Compile-time logic to map ArrayDataType to the corresponding C++ scalar type
@@ -490,7 +491,7 @@ struct ConvOperator : Operator {
 //   inputs[4]: optional: merge repeated.
 //
 //  Outputs:
-//    outputs[0]: deocoded.
+//    outputs[0]: decoded.
 //    outputs[1]: log probability.
 //
 // TensorFlow equivalent: CTCBeamSearchDecoder
@@ -1199,6 +1200,8 @@ struct SqueezeOperator : Operator {
 //   inputs[0]: required: the output shape
 //   inputs[1]: required: the weights
 //   inputs[2]: required: the input activations array
+//   inputs[3]: optional: the bias vector, specifying the biases for each output
+//                        channel.
 //   NOTE: The input activations is NOT the first input.
 //
 //
@@ -1211,6 +1214,7 @@ struct TransposeConvOperator : Operator {
     OUTPUT_SHAPE = 0,
     WEIGHTS = 1,
     DATA_INPUT = 2,
+    BIAS = 3,
   };
 
   TransposeConvOperator() : Operator(OperatorType::kTransposeConv) {}
@@ -1258,7 +1262,7 @@ struct ExpandDimsOperator : Operator {
   ExpandDimsOperator() : Operator(OperatorType::kExpandDims) {}
 };
 
-// Ceates a tensor of shape dims and fills it with the given scalar value.
+// Creates a tensor of shape dims and fills it with the given scalar value.
 // Output type will be the same as the given scalar value.
 //
 // Inputs:

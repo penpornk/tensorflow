@@ -253,7 +253,7 @@ bool ConstantFolding::ForwardInputs(NodeDef* node,
     }
   }
 
-  const std::set<NodeDef*>& tmp = node_map_->GetOutputs(node->name());
+  const auto& tmp = node_map_->GetOutputs(node->name());
   const std::vector<NodeDef*> consumers(tmp.begin(), tmp.end());
   bool updated_graph = false;
   for (int input_idx : inputs_to_forward) {
@@ -691,7 +691,7 @@ Status ConstantFolding::MaterializeBroadcastGradientArgs(
   }
 
   // We make a copy here since we might mutate the set.
-  const std::set<NodeDef*> outputs = node_map_->GetOutputs(node.name());
+  const auto outputs = node_map_->GetOutputs(node.name());
   for (NodeDef* output : outputs) {
     for (int k = 0; k < output->input_size(); ++k) {
       int port;
@@ -1053,7 +1053,7 @@ bool ConstantFolding::MaybeFoldable(const NodeDef& node,
       op.find("Reader") != string::npos) {
     return false;
   }
-  if (op.find("Quantized") != string::npos || op.find("Sparse") == 0) {
+  if (op.find("Quantized") != string::npos || absl::StartsWith(op, "Sparse")) {
     return false;
   }
 
@@ -1594,13 +1594,8 @@ Status ConstantFolding::FoldGraph(
     }
     // We need to record a copy of output nodes before FoldNode() modifies it.
     // We also need to ensure that the fanout is sorted deterministically.
-    const std::set<NodeDef*>& outputs = node_map_->GetOutputs(node->name());
-    std::vector<NodeDef*> fanout(outputs.begin(), outputs.end());
-    std::sort(fanout.begin(), fanout.end(),
-              [](const NodeDef* n1, const NodeDef* n2) {
-                return n1->name() < n2->name();
-              });
-
+    std::vector<NodeDef*> fanout =
+        node_map_->GetOutputsOrderedByNodeName(node->name());
     bool result_too_large = false;
     Status s = FoldNode(node, output, &result_too_large);
     processed_nodes.insert(node->name());
@@ -1919,6 +1914,7 @@ Status ConstantFolding::ReplaceOperationWithConstantTensor(DataType dtype,
                                                            TensorProto* value,
                                                            NodeDef* node,
                                                            GraphDef* graph) {
+  if (dtype == DT_VARIANT) return Status::OK();
   node->set_op("Const");
   node->clear_attr();
   (*node->mutable_attr())["dtype"].set_type(dtype);
@@ -1942,6 +1938,7 @@ Status ConstantFolding::ReplaceOperationWithConstant(
     double value, const GraphProperties& properties,
     const TensorShapeProto& shape, NodeDef* node, GraphDef* graph) {
   const DataType dtype = GetDataTypeFromNodeOrProps(*node, properties);
+  if (dtype == DT_VARIANT) return Status::OK();
   AttrValue tensor_attr;
   Status s = CreateConstantTensorAttrValue(dtype, value, shape, &tensor_attr);
   if (!s.ok()) {
@@ -1964,10 +1961,11 @@ Status ConstantFolding::SimplifyGraph(
     // generalize to only restrict certain simplifications.
     if (nodes_to_not_simplify->find(node->name()) ==
         nodes_to_not_simplify->end()) {
-      if (HasTPUAttributes(optimized_graph->node(i))) {
+      if (HasTPUAttributes(*node)) {
         nodes_to_not_simplify->insert(node->name());
         continue;
       }
+
       TF_RETURN_IF_ERROR(
           SimplifyNode(use_shape_info, node, optimized_graph, properties));
     }
@@ -2446,12 +2444,8 @@ bool ConstantFolding::SimplifySwitch(GraphDef* optimized_graph, NodeDef* node) {
         SetTensorValue(DT_BOOL, false, &false_t).ok()) {
       // Copy the set of consumers of the switch as they will be manipulated
       // below.
-      const auto& consumer_set = node_map_->GetOutputs(node->name());
-      std::vector<NodeDef*> consumers(consumer_set.begin(), consumer_set.end());
-      std::sort(consumers.begin(), consumers.end(),
-                [](const NodeDef* n1, const NodeDef* n2) {
-                  return n1->name() < n2->name();
-                });
+      std::vector<NodeDef*> consumers =
+          node_map_->GetOutputsOrderedByNodeName(node->name());
       // Create constant false & true nodes.
       NodeDef tmp_false_node;
       tmp_false_node.set_name(OptimizedNodeName(*node, "_const_false"));

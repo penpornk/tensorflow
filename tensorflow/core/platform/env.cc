@@ -400,7 +400,7 @@ bool Env::CreateUniqueFileName(string* prefix, const string& suffix) {
 #else
   int32 pid = static_cast<int32>(getpid());
 #endif
-  uint64 now_microsec = NowMicros();
+  long long now_microsec = NowMicros();  // NOLINT
 
   *prefix += strings::Printf("%s-%x-%d-%llx", port::Hostname().c_str(), tid,
                              pid, now_microsec);
@@ -522,7 +522,7 @@ class FileStream : public ::tensorflow::protobuf::io::ZeroCopyInputStream {
   }
 
  private:
-  static const int kBufSize = 512 << 10;
+  static constexpr int kBufSize = 512 << 10;
 
   RandomAccessFile* file_;
   int64 pos_;

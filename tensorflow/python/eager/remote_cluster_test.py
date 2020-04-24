@@ -128,6 +128,7 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
 
   def tearDown(self):
     super(DynamicClusterTest, self).tearDown()
+    ops.device(None).__enter__()
     context._reset_context()
 
   @test_util.run_in_async_and_sync_mode
@@ -360,6 +361,8 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
   @test_util.run_in_async_and_sync_mode
   def testMultiThreadPendingNodesLockFree(self):
     """Update cluster when other remote function calls are being launched."""
+    self.skipTest("b/154053481")
+
     with ops.device(self.device_t1):
       x1 = array_ops.ones([2, 2])
 
@@ -369,6 +372,9 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
     @def_function.function
     def worker_fn(i):
       return math_ops.matmul(i, i)
+
+    # Forces function tracing and registration
+    worker_fn.get_concrete_function(x1)
 
     def thread_fn(device, results):
       for i in range(num_calls):
@@ -489,21 +495,6 @@ class DynamicClusterTest(test.TestCase, parameterized.TestCase):
         errors.InvalidArgumentError,
         "Client for target /job:remote_device/replica:0/task:10 not found."):
       context.check_alive("/job:remote_device/replica:0/task:10")
-
-
-class DynamicClusterWithoutLazyRemoteInputsCopyTest(DynamicClusterTest):
-
-  @classmethod
-  def setUpClass(cls):
-    super(DynamicClusterWithoutLazyRemoteInputsCopyTest, cls).setUpClass()
-    context._reset_context()
-    context.context().lazy_remote_inputs_copy = False
-
-  @classmethod
-  def tearDownClass(cls):
-    super(DynamicClusterWithoutLazyRemoteInputsCopyTest, cls).tearDownClass()
-    context._reset_context()
-    context.context().lazy_remote_inputs_copy = True
 
 
 if __name__ == "__main__":

@@ -173,7 +173,8 @@ class DebugEventsMonitorTest(dumping_callback_test_lib.DumpingCallbackTestBase,
         self.assertLen(traces[1].debug_tensor_value, 11)
         self.assertLen(traces[2].debug_tensor_value, 11)
       elif tensor_debug_mode == "FULL_TENSOR":
-        self.assertLen(traces, 4)  # [Placeholder:0, Unique:0, Unique:1, Sum:0].
+        # [Placeholder:0, Unique:0, Unique:1, Const:0, Sum:0].
+        self.assertLen(traces, 5)
         self.assertEqual(traces[0].op_type, "Placeholder")
         self.assertEqual(traces[0].output_slot, 0)
         self.assertIsNone(traces[0].debug_tensor_value)
@@ -192,11 +193,16 @@ class DebugEventsMonitorTest(dumping_callback_test_lib.DumpingCallbackTestBase,
         self.assertAllEqual(
             reader.graph_execution_trace_to_tensor_value(traces[2]),
             [0, 1, 2, 3, 0])
-        self.assertEqual(traces[3].op_type, "Sum")
+        self.assertEqual(traces[3].op_type, "Const")
         self.assertEqual(traces[3].output_slot, 0)
         self.assertIsNone(traces[3].debug_tensor_value)
         self.assertAllClose(
-            reader.graph_execution_trace_to_tensor_value(traces[3]), 17.)
+            reader.graph_execution_trace_to_tensor_value(traces[3]), [0])
+        self.assertEqual(traces[4].op_type, "Sum")
+        self.assertEqual(traces[4].output_slot, 0)
+        self.assertIsNone(traces[4].debug_tensor_value)
+        self.assertAllClose(
+            reader.graph_execution_trace_to_tensor_value(traces[4]), 17.)
 
 
 class AlertDataObjectsTest(test_util.TensorFlowTestCase):
@@ -303,6 +309,35 @@ class InfNanMonitorTest(test_util.TensorFlowTestCase, parameterized.TestCase):
     self.assertEqual(alert.num_nan, 3)
     self.assertEqual(alert.execution_index, 60)
     self.assertIsNone(alert.graph_execution_trace_index)
+
+  @parameterized.named_parameters(
+      ("Shape",
+       debug_event_pb2.TensorDebugMode.SHAPE,
+       # [tensor_id, dtype, rank, element_cont, ...shape_truncate_6]
+       [[-1, 1, 2, 6, 3, 2, 0, 0, 0, 0],
+        [-1, 10, 1, 7, 7, 0, 0, 0, 0, 0]]),
+  )
+  def testInfNanMonitorOnExecutionUnderModeWithNoInfNanInfo(
+      self,
+      tensor_debug_mode,
+      debug_tensor_values):
+    mock_reader = test.mock.MagicMock()
+    monitor = debug_events_monitors.InfNanMonitor(mock_reader)
+    execution_digest = debug_events_reader.ExecutionDigest(
+        1234, 1, "BarOp", output_tensor_device_ids=[0, 1])
+
+    execution = debug_events_reader.Execution(
+        execution_digest,
+        "worker01",
+        ["a1", "b2", "e3"],
+        tensor_debug_mode,
+        graph_id=None,
+        input_tensor_ids=[12, 34],
+        output_tensor_ids=[56, 78],
+        debug_tensor_values=debug_tensor_values)
+    monitor.on_execution(60, execution)
+
+    self.assertEmpty(monitor.alerts())
 
   @parameterized.named_parameters(
       ("FloatsScalarWithInfAndNan", np.inf, np.float32, 1, 0, 1, 0),

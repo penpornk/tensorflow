@@ -35,28 +35,28 @@ limitations under the License.
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/FormatVariadic.h"
-#include "mlir/Dialect/StandardOps/IR/Ops.h"  // TF:llvm-project
-#include "mlir/Dialect/Traits.h"  // TF:llvm-project
-#include "mlir/IR/Attributes.h"  // TF:llvm-project
-#include "mlir/IR/Builders.h"  // TF:llvm-project
-#include "mlir/IR/Diagnostics.h"  // TF:llvm-project
-#include "mlir/IR/DialectImplementation.h"  // TF:llvm-project
-#include "mlir/IR/Function.h"  // TF:llvm-project
-#include "mlir/IR/Location.h"  // TF:llvm-project
-#include "mlir/IR/MLIRContext.h"  // TF:llvm-project
-#include "mlir/IR/Matchers.h"  // TF:llvm-project
-#include "mlir/IR/OpDefinition.h"  // TF:llvm-project
-#include "mlir/IR/OpImplementation.h"  // TF:llvm-project
-#include "mlir/IR/PatternMatch.h"  // TF:llvm-project
-#include "mlir/IR/StandardTypes.h"  // TF:llvm-project
-#include "mlir/IR/TypeUtilities.h"  // TF:llvm-project
-#include "mlir/IR/Types.h"  // TF:llvm-project
-#include "mlir/IR/Value.h"  // TF:llvm-project
-#include "mlir/Parser.h"  // TF:llvm-project
-#include "mlir/Support/LLVM.h"  // TF:llvm-project
-#include "mlir/Support/LogicalResult.h"  // TF:llvm-project
-#include "mlir/Support/STLExtras.h"  // TF:llvm-project
-#include "mlir/Transforms/InliningUtils.h"  // TF:llvm-project
+#include "mlir/Dialect/StandardOps/IR/Ops.h"  // from @llvm-project
+#include "mlir/Dialect/Traits.h"  // from @llvm-project
+#include "mlir/IR/Attributes.h"  // from @llvm-project
+#include "mlir/IR/Builders.h"  // from @llvm-project
+#include "mlir/IR/Diagnostics.h"  // from @llvm-project
+#include "mlir/IR/DialectImplementation.h"  // from @llvm-project
+#include "mlir/IR/Function.h"  // from @llvm-project
+#include "mlir/IR/Location.h"  // from @llvm-project
+#include "mlir/IR/MLIRContext.h"  // from @llvm-project
+#include "mlir/IR/Matchers.h"  // from @llvm-project
+#include "mlir/IR/OpDefinition.h"  // from @llvm-project
+#include "mlir/IR/OpImplementation.h"  // from @llvm-project
+#include "mlir/IR/PatternMatch.h"  // from @llvm-project
+#include "mlir/IR/StandardTypes.h"  // from @llvm-project
+#include "mlir/IR/TypeUtilities.h"  // from @llvm-project
+#include "mlir/IR/Types.h"  // from @llvm-project
+#include "mlir/IR/Value.h"  // from @llvm-project
+#include "mlir/Parser.h"  // from @llvm-project
+#include "mlir/Support/LLVM.h"  // from @llvm-project
+#include "mlir/Support/LogicalResult.h"  // from @llvm-project
+#include "mlir/Transforms/InliningUtils.h"  // from @llvm-project
+#include "tensorflow/compiler/mlir/tensorflow/ir/tf_structs.h"
 #include "tensorflow/compiler/mlir/tensorflow/ir/tf_types.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/util/tensor_format.h"
@@ -82,8 +82,7 @@ static RankedTensorType GetRankedTensorTypeForOperand(Value operand) {
 
 // Returns true if the given `value` is of ranked float tensor type with the
 // given `rank`.
-static inline bool isOfRankedFloatTensorType(Value value, int rank) {
-  RankedTensorType type = GetRankedTensorTypeForOperand(value);
+static inline bool IsOfRankedFloatTensorType(RankedTensorType type, int rank) {
   return type && type.getRank() == rank &&
          type.getElementType().isa<FloatType>();
 }
@@ -155,6 +154,53 @@ static bool IsUnknownDimOrRank(int64_t dim_or_rank) {
   return dim_or_rank == -1;
 }
 
+bool BroadcastCompatible(ArrayRef<Type> lhs, ArrayRef<Type> rhs) {
+  if (lhs.size() != rhs.size()) return false;
+  for (auto types : llvm::zip(lhs, rhs)) {
+    auto lhs_type = std::get<0>(types);
+    auto rhs_type = std::get<1>(types);
+
+    // This should be true for all TF ops:
+    auto lhs_tt = lhs_type.dyn_cast<TensorType>();
+    auto rhs_tt = rhs_type.dyn_cast<TensorType>();
+    if (!lhs_tt || !rhs_tt) {
+      if (lhs_type != rhs_type) return false;
+      continue;
+    }
+
+    // Verify matching element types. These should be identical, except for
+    // variant type where unknown subtype is considered compatible with all
+    // subtypes.
+    auto lhs_et = lhs_tt.getElementType();
+    auto rhs_et = rhs_tt.getElementType();
+    if (lhs_et != rhs_et) {
+      // If either is not a variant type, then the element types don't match.
+      auto lhs_vt = lhs_et.dyn_cast<TF::VariantType>();
+      auto rhs_vt = rhs_et.dyn_cast<TF::VariantType>();
+      if (!lhs_vt || !rhs_vt) return false;
+
+      // Consider the subtype of variant types.
+      auto lhs_vt_st = lhs_vt.getSubtypes();
+      auto rhs_vt_st = rhs_vt.getSubtypes();
+      if (!lhs_vt_st.empty() && !rhs_vt_st.empty()) {
+        for (auto subtypes : llvm::zip(lhs_vt_st, rhs_vt_st)) {
+          if (!BroadcastCompatible(std::get<0>(subtypes),
+                                   std::get<1>(subtypes)))
+            return false;
+        }
+      }
+    }
+
+    auto lhs_rt = lhs_type.dyn_cast<RankedTensorType>();
+    auto rhs_rt = rhs_type.dyn_cast<RankedTensorType>();
+    if (!lhs_rt || !rhs_rt) return true;
+    SmallVector<int64_t, 4> shape;
+    return OpTrait::util::getBroadcastedShape(lhs_rt.getShape(),
+                                              rhs_rt.getShape(), shape);
+  }
+  return true;
+}
+
 // Returns the tf.Equal/tf.NotEqual result type given `x` and `y` and inputs. If
 // `incompatible_shape_error` is true, reports error if `x` and `y` has
 // incompatible shapes. Otherwise, returns a tensor type with unknown rank.
@@ -207,7 +253,7 @@ static Type InferReductionOpType(Value input, Value reduction_indices,
 
   int64_t num_reduce_dim = 0;
   llvm::SmallVector<bool, 4> is_reduce_dim(rank, false);
-  for (APInt index : indices.getValues<APInt>()) {
+  for (const APInt &index : indices.getValues<APInt>()) {
     int64_t dim = GetDimForAxis(index.getSExtValue(), rank);
     // Invalid input.
     if (dim < 0 || dim >= rank) return UnrankedTensorType::get(element_ty);
@@ -293,6 +339,51 @@ static LogicalResult VerifyTypesCompatibility(
 }
 
 //===----------------------------------------------------------------------===//
+// Helper functions detect device capabilities from RuntimeDevices.
+//===----------------------------------------------------------------------===//
+
+namespace {
+using DeviceNameUtils = ::tensorflow::DeviceNameUtils;
+using ParsedName = ::tensorflow::DeviceNameUtils::ParsedName;
+
+bool IsGpuDevice(const DeviceNameUtils::ParsedName &device) {
+  return device.type == ::tensorflow::DEVICE_GPU;
+}
+
+}  // namespace
+
+// Returns true if at least one GPU device is available at runtime.
+bool CanUseGpuDevice(const RuntimeDevices &devices) {
+  return llvm::any_of(devices.device_names(), IsGpuDevice);
+}
+
+// Returns true if all of the GPUs available at runtime support TensorCores
+// (NVIDIA compute capability >= 7.0).
+bool CanUseTensorCores(const RuntimeDevices &devices) {
+  auto has_tensor_cores = [&](const DeviceNameUtils::ParsedName &device) {
+    auto md = devices.GetGpuDeviceMetadata(device);
+    return md ? md->cc_major().getInt() >= 7 : false;
+  };
+  return llvm::all_of(
+      llvm::make_filter_range(devices.device_names(), IsGpuDevice),
+      has_tensor_cores);
+}
+
+// Returns true if operation does not have explicit device placement that would
+// prevent it from running on GPU device.
+bool CanUseGpuDevice(Operation *op) {
+  auto device_attr = op->getAttrOfType<StringAttr>("device");
+  if (!device_attr || device_attr.getValue().empty()) return true;
+
+  DeviceNameUtils::ParsedName device;
+  if (!DeviceNameUtils::ParseFullName(device_attr.getValue().str(), &device))
+    return false;
+
+  // We can't use GPU if operation explicitly placed on non-GPU device.
+  return !device.has_type || device.type == ::tensorflow::DEVICE_GPU;
+}
+
+//===----------------------------------------------------------------------===//
 // TF op helper functions to work with layout transformation.
 //===----------------------------------------------------------------------===//
 
@@ -358,11 +449,11 @@ static bool AreCancellablePermutations(DenseIntElementsAttr perm0,
   if (perm0.getNumElements() != perm1.getNumElements()) return false;
 
   SmallVector<int64_t, 8> perm0_values;
-  for (auto value : perm0.getIntValues())
+  for (const auto &value : perm0.getIntValues())
     perm0_values.push_back(value.getSExtValue());
 
   SmallVector<int64_t, 8> perm1_values;
-  for (auto value : perm1.getIntValues())
+  for (const auto &value : perm1.getIntValues())
     perm1_values.push_back(value.getSExtValue());
 
   for (int i = 0; i < perm0_values.size(); ++i) {
@@ -534,16 +625,16 @@ namespace {
 struct AssertWithTrue : public OpRewritePattern<AssertOp> {
   using OpRewritePattern<AssertOp>::OpRewritePattern;
 
-  PatternMatchResult matchAndRewrite(AssertOp op,
-                                     PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(AssertOp op,
+                                PatternRewriter &rewriter) const override {
     ElementsAttr cst;
     if (matchPattern(op.condition(), m_Constant(&cst))) {
       if (cst.getValue<BoolAttr>({}).getValue()) {
         rewriter.eraseOp(op);
-        return matchSuccess();
+        return success();
       }
     }
-    return matchFailure();
+    return failure();
   }
 };
 }  // namespace
@@ -565,6 +656,16 @@ void BatchMatMulOp::getCanonicalizationPatterns(
 //===----------------------------------------------------------------------===//
 // BatchMatMulV2Op
 //===----------------------------------------------------------------------===//
+
+static LogicalResult Verify(BatchMatMulV2Op op) {
+  if (!HasRankAtLeast(op.x(), 2)) {
+    return op.emitOpError("requires lhs operand to have rank at least two");
+  }
+  if (!HasRankAtLeast(op.y(), 2)) {
+    return op.emitOpError("requires rhs operand to have rank at least two");
+  }
+  return success();
+}
 
 void BatchMatMulV2Op::getCanonicalizationPatterns(
     OwningRewritePatternList &results, MLIRContext *context) {
@@ -837,10 +938,12 @@ OpFoldResult ConstOp::fold(ArrayRef<Attribute> operands) {
 // Builds a constant op with the specified attribute `value`. The result
 // op's type is deduced from `value`; if `value` is of scalar type,
 // wraps it up with a tensor type of empty shape.
+// TODO(jpienaar): This one differs from the autogenerated one as it takes an
+// attribute but always creates an ElementsAttr internally.
 void ConstOp::build(Builder *builder, OperationState &result, Attribute value) {
   ShapedType type;
-  if (auto elemAttr = value.dyn_cast<ElementsAttr>()) {
-    type = elemAttr.getType();
+  if (auto elem_attr = value.dyn_cast<ElementsAttr>()) {
+    return ConstOp::build(builder, result, elem_attr);
   } else if (value.isa<BoolAttr>() || value.isa<FloatAttr>() ||
              value.isa<IntegerAttr>()) {
     // All TensorFlow types must be tensor types. In the build() method,
@@ -848,12 +951,10 @@ void ConstOp::build(Builder *builder, OperationState &result, Attribute value) {
     // types. But we need to wrap it up with ElementsAttr to construct
     // valid TensorFlow constants.
     type = RankedTensorType::get(/*shape=*/{}, value.getType());
-    value = DenseElementsAttr::get(type, value);
+    return ConstOp::build(builder, result, DenseElementsAttr::get(type, value));
   }
-  // TODO: support other TensorFlow specific types.
-  assert(type && "unsupported attribute type for building tf.Const");
-  result.types.push_back(type);
-  result.addAttribute("value", value);
+  // TODO(jpienaar): support other TensorFlow specific types.
+  llvm_unreachable("unsupported attribute type for building tf.Const");
 }
 
 void ConstOp::build(Builder *builder, OperationState &result, Type type,
@@ -868,6 +969,24 @@ void ConstOp::build(Builder *builder, OperationState &result, Type type,
   // Otherwise, default to the attribute builder.
   ConstOp::build(builder, result, value);
   assert(type == result.types[0] && "type mismatch in construction");
+}
+
+LogicalResult ConstOp::inferReturnTypes(
+    MLIRContext *context, Optional<Location> location, ValueRange operands,
+    ArrayRef<NamedAttribute> attributes, RegionRange regions,
+    SmallVectorImpl<Type> &inferredReturnTypes) {
+  for (NamedAttribute named_attr : attributes) {
+    if (named_attr.first.strref() != "value") continue;
+    auto value = named_attr.second;
+    if (auto elem_attr = value.dyn_cast<ElementsAttr>()) {
+      inferredReturnTypes.assign({elem_attr.getType()});
+      return success();
+    }
+    return emitOptionalError(location,
+                             "attribute 'value' failed to satisfy constraint: "
+                             "constant vector/tensor");
+  }
+  return emitOptionalError(location, "missing attribute 'value'");
 }
 
 //===----------------------------------------------------------------------===//
@@ -990,8 +1109,109 @@ LogicalResult Conv2DOp::UpdateDataFormat(StringRef data_format) {
   return success();
 }
 
+StringRef Conv2DOp::GetOptimalLayout(const RuntimeDevices &devices) {
+  // Keep current data format if no GPUs are available or if explicit placement
+  // does not allow to use GPU for this operation.
+  if (!CanUseGpuDevice(devices) || !CanUseGpuDevice(getOperation()))
+    return data_format();
+
+  // Input must be a tensor.
+  auto input_ty = input().getType().dyn_cast<TensorType>();
+  if (!input_ty) return data_format();
+
+  // For f16 data type on devices with Tensor Cores support NHWC data format
+  // is up to ~2x faster.
+  const bool is_f16 = input_ty.getElementType().isF16();
+  if (is_f16 && CanUseTensorCores(devices)) return "NHWC";
+
+  // For f32/f16 data type decision depends on the filter size in spatial
+  // dimensions, for other data types we keep current data format.
+  if (!input_ty.getElementType().isF32() && !input_ty.getElementType().isF16())
+    return data_format();
+
+  // Keep current data format if filter rank is unknown or not equal to 4.
+  auto filter_ty = filter().getType().dyn_cast<RankedTensorType>();
+  if (!filter_ty || filter_ty.getRank() != 4) return data_format();
+
+  const int64_t d0 = filter_ty.getDimSize(0);
+  const int64_t d1 = filter_ty.getDimSize(1);
+
+  auto all_ones = [](ArrayAttr arr) -> bool {
+    return llvm::all_of(arr, [](Attribute attr) -> bool {
+      return attr.cast<IntegerAttr>().getInt() == 1;
+    });
+  };
+
+  // Convolutions with 1x1 filter and with strides and dilations all ones, can
+  // be computed as a GEMM in NHWC data format, and can be up to ~2x times
+  // faster than convolution in NCHW.
+  const bool one_by_one = d0 == 1 && d1 == 1;
+  const bool trivial_strides = all_ones(strides());
+  const bool trivial_dilations = all_ones(dilations());
+
+  // TODO(ezhulenev): This might lead to excessive transposes in the final IR,
+  // if the ratio of 1x1 convolutions to regular convolutions is close to 1:1.
+  // Also FusedBatchNorm in training mode prefers NCHW data format. Check if all
+  // users can efficiently use NHWC data format?
+  if (one_by_one && trivial_strides && trivial_dilations) {
+    return "NHWC";
+  }
+
+  // If filter spatial dimensions are unknown or not 1x1 we prefer NCHW, because
+  // it's the fastest option on NVIDIA GPUs with cuDNN library support.
+  return "NCHW";
+}
+
 //===----------------------------------------------------------------------===//
-// Conv2dBackpropInputOp
+// Conv2dBackpropFilterOp
+//===----------------------------------------------------------------------===//
+
+LogicalResult Conv2DBackpropFilterOp::UpdateDataFormat(StringRef data_format) {
+  StringRef src_data_format = this->data_format();
+
+  auto perm = GetDataFormatPermutation(src_data_format, data_format);
+  if (perm.empty()) return failure();
+
+  // Update data_format attribute and result types.
+  if (failed(::mlir::TF::UpdateDataFormat(data_format, this))) return failure();
+
+  // Update convolution attributes.
+  setAttr("dilations", ShuffleArrayAttr(dilations(), perm));
+  setAttr("strides", ShuffleArrayAttr(strides(), perm));
+  setAttr("explicit_paddings", ShuffleArrayAttr(explicit_paddings(), perm, 2));
+
+  // Permute filter sizes operand.
+  OpBuilder builder(getOperation());
+  auto filter_sizes_permuted = builder.create<TF::DataFormatVecPermuteOp>(
+      getLoc(), filter_sizes(), StringAttr::get(src_data_format, getContext()),
+      StringAttr::get(data_format, getContext()));
+  setOperand(1, filter_sizes_permuted);
+
+  return success();
+}
+
+StringRef Conv2DBackpropFilterOp::GetOptimalLayout(
+    const RuntimeDevices &devices) {
+  // Keep current data format if no GPUs are available or if explicit placement
+  // does not allow to use GPU for this operation.
+  if (!CanUseGpuDevice(devices) || !CanUseGpuDevice(getOperation()))
+    return data_format();
+
+  // Input must be a tensor.
+  auto input_ty = input().getType().dyn_cast<TensorType>();
+  if (!input_ty) return data_format();
+
+  // For f16 data type on devices with Tensor Cores support NHWC data format
+  // is up to ~2x faster.
+  const bool is_f16 = input_ty.getElementType().isF16();
+  if (is_f16 && CanUseTensorCores(devices)) return "NHWC";
+
+  // Otherwise always use "NCHW".
+  return "NCHW";
+}
+
+//===----------------------------------------------------------------------===//
+// Conv2DBackpropInputOp
 //===----------------------------------------------------------------------===//
 
 static LogicalResult Verify(Conv2DBackpropInputOp op) {
@@ -1009,7 +1229,84 @@ static LogicalResult Verify(Conv2DBackpropInputOp op) {
   }
 
   return success();
-}  // namespace TF
+}
+
+LogicalResult Conv2DBackpropInputOp::UpdateDataFormat(StringRef data_format) {
+  StringRef src_data_format = this->data_format();
+
+  auto perm = GetDataFormatPermutation(src_data_format, data_format);
+  if (perm.empty()) return failure();
+
+  // Update data_format attribute and result types.
+  if (failed(::mlir::TF::UpdateDataFormat(data_format, this))) return failure();
+
+  // Update convolution attributes.
+  setAttr("dilations", ShuffleArrayAttr(dilations(), perm));
+  setAttr("strides", ShuffleArrayAttr(strides(), perm));
+  setAttr("explicit_paddings", ShuffleArrayAttr(explicit_paddings(), perm, 2));
+
+  // Permute input sizes operand.
+  OpBuilder builder(getOperation());
+  auto input_sizes_permuted = builder.create<TF::DataFormatVecPermuteOp>(
+      getLoc(), input_sizes(), StringAttr::get(src_data_format, getContext()),
+      StringAttr::get(data_format, getContext()));
+  setOperand(0, input_sizes_permuted);
+
+  return success();
+}
+
+StringRef Conv2DBackpropInputOp::GetOptimalLayout(
+    const RuntimeDevices &devices) {
+  // Keep current data format if no GPUs are available or if explicit placement
+  // does not allow to use GPU for this operation.
+  if (!CanUseGpuDevice(devices) || !CanUseGpuDevice(getOperation()))
+    return data_format();
+
+  // Filter must be a tensor.
+  auto filter_ty = filter().getType().dyn_cast<TensorType>();
+  if (!filter_ty) return data_format();
+
+  // For f16 data type on devices with Tensor Cores support NHWC data format
+  // is up to ~2x faster.
+  const bool is_f16 = filter_ty.getElementType().isF16();
+  if (is_f16 && CanUseTensorCores(devices)) return "NHWC";
+
+  // Otherwise always use "NCHW".
+  return "NCHW";
+}
+
+//===----------------------------------------------------------------------===//
+// DataFormatVecPermuteOp
+//===----------------------------------------------------------------------===//
+
+static LogicalResult Verify(DataFormatVecPermuteOp op) {
+  auto input_ty = op.x().getType().dyn_cast<RankedTensorType>();
+  if (!input_ty) return success();
+
+  int rank = input_ty.getRank();
+  if (rank != 1 && rank != 2)
+    return op.emitOpError("requires input of rank 1 or 2");
+
+  if (rank == 1) {
+    int64_t dim0 = input_ty.getDimSize(0);
+    if (dim0 != ShapedType::kDynamicSize && dim0 != 4)
+      return op.emitOpError("requires 1D input of size 4");
+  }
+
+  if (rank == 2) {
+    int64_t dim0 = input_ty.getDimSize(0);
+    if (dim0 != ShapedType::kDynamicSize && dim0 != 4)
+      return op.emitOpError(
+          "requires first dimensions of 2D input to be of size 4");
+
+    int64_t dim1 = input_ty.getDimSize(1);
+    if (dim1 != ShapedType::kDynamicSize && dim1 != 2)
+      return op.emitOpError(
+          "requires second dimensions of 2D input to be of size 2");
+  }
+
+  return success();
+}
 
 //===----------------------------------------------------------------------===//
 // DivOp
@@ -1228,10 +1525,12 @@ static LogicalResult Verify(FakeQuantWithMinMaxArgsOp op) {
 // FakeQuantWithMinMaxVarsOp
 //===----------------------------------------------------------------------===//
 static LogicalResult Verify(FakeQuantWithMinMaxVarsOp op) {
-  if (!isOfRankedFloatTensorType(op.min(), 0))
+  auto min = GetRankedTensorTypeForOperand(op.min());
+  if (min && !IsOfRankedFloatTensorType(min, 0))
     return op.emitOpError("requires min to be a 0d float tensor");
 
-  if (!isOfRankedFloatTensorType(op.max(), 0))
+  auto max = GetRankedTensorTypeForOperand(op.max());
+  if (max && !IsOfRankedFloatTensorType(max, 0))
     return op.emitOpError("requires max to be a 0d float tensor");
 
   int64_t num_bits = op.num_bits().getSExtValue();
@@ -1246,30 +1545,33 @@ static LogicalResult Verify(FakeQuantWithMinMaxVarsOp op) {
 // FakeQuantWithMinMaxVarsPerChannelOp
 //===----------------------------------------------------------------------===//
 static LogicalResult Verify(FakeQuantWithMinMaxVarsPerChannelOp op) {
-  if (!isOfRankedFloatTensorType(op.min(), 1))
+  auto min = GetRankedTensorTypeForOperand(op.min());
+  if (min && !IsOfRankedFloatTensorType(min, 1))
     return op.emitOpError("requires min to be a 1d float tensor");
 
-  if (!isOfRankedFloatTensorType(op.max(), 1))
+  auto max = GetRankedTensorTypeForOperand(op.max());
+  if (max && !IsOfRankedFloatTensorType(max, 1))
     return op.emitOpError("requires max to be a 1d float tensor");
 
   Value inputs = op.inputs();
-  if (!HasRankAtLeast(inputs, 1) ||
-      inputs.getType().isa<UnrankedTensorType>()) {
+  if (!HasRankAtLeast(inputs, 1))
     return op.emitError("requires inputs to be at least 1d float tensor");
-  }
 
-  auto inputsType = inputs.getType().cast<ShapedType>();
-  int depth = inputsType.getDimSize(inputsType.getRank() - 1);
-  if (op.min().getType().cast<ShapedType>().getDimSize(0) != depth ||
-      op.max().getType().cast<ShapedType>().getDimSize(0) != depth) {
-    return op.emitOpError(
-        "requires min and max to have same size as last dimension of inputs");
-  }
   int64_t num_bits = op.num_bits().getSExtValue();
   if (num_bits < 2 || num_bits > 16) {
     return op.emitOpError(
         "requires num_bits to be between 2 and 16, inclusive");
   }
+
+  auto inputs_type = inputs.getType().dyn_cast<RankedTensorType>();
+  if (!inputs_type) return success();
+  int depth = inputs_type.getDimSize(inputs_type.getRank() - 1);
+  if ((min && min.getDimSize(0) != depth) ||
+      (max && max.getDimSize(0) != depth)) {
+    return op.emitOpError(
+        "requires min and max to have same size as last dimension of inputs");
+  }
+
   return success();
 }
 
@@ -1286,24 +1588,78 @@ static LogicalResult Verify(FillOp op) {
   return success();
 }
 
+static ShapedType InferFillOpType(Value dims, Value value) {
+  Type etype = value.getType().cast<ShapedType>().getElementType();
+
+  DenseIntElementsAttr dims_attr;
+  if (!matchPattern(dims, m_Constant(&dims_attr))) {
+    return UnrankedTensorType::get(etype);
+  }
+
+  llvm::SmallVector<int64_t, 4> shape;
+  shape.reserve(dims_attr.getNumElements());
+  for (const APInt &dim : dims_attr.getValues<APInt>()) {
+    shape.push_back(dim.getSExtValue());
+  }
+  return RankedTensorType::get(shape, etype);
+}
+
+void FillOp::build(Builder *builder, OperationState &result, Value dims,
+                   Value value) {
+  FillOp::build(builder, result, InferFillOpType(dims, value), dims, value);
+}
+
+//===----------------------------------------------------------------------===//
+// FusedBatchNormGradOp
+//===----------------------------------------------------------------------===//
+
+// TODO(b/150954845): Add benchmarks to verify that layout preference didn't
+// change in the latest GPU generations.
+
+LogicalResult FusedBatchNormGradV3Op::UpdateDataFormat(StringRef data_format) {
+  return ::mlir::TF::UpdateDataFormat(data_format, this);
+}
+
+StringRef FusedBatchNormGradV3Op::GetOptimalLayout(
+    const RuntimeDevices &devices) {
+  // Keep current data format if no GPUs are available or if explicit placement
+  // does not allow to use GPU for this operation.
+  if (!CanUseGpuDevice(devices) || !CanUseGpuDevice(getOperation()))
+    return data_format();
+
+  // For f16 data type on devices with Tensor Cores support NHWC data format
+  // is up to ~2x faster.
+  auto x_ty = x().getType().cast<TensorType>();
+  const bool is_f16 = x_ty.getElementType().isF16();
+  if (is_f16 && CanUseTensorCores(devices)) return "NHWC";
+
+  // For all other data types prefer NCHW.
+  return "NCHW";
+}
+
 //===----------------------------------------------------------------------===//
 // FusedBatchNormOp
 //===----------------------------------------------------------------------===//
 
 static LogicalResult Verify(FusedBatchNormOp op) {
-  if (!isOfRankedFloatTensorType(op.x(), 4))
+  auto x = GetRankedTensorTypeForOperand(op.x());
+  if (x && !IsOfRankedFloatTensorType(x, 4))
     return op.emitOpError("requires x to be a 4D float tensor");
 
-  if (!isOfRankedFloatTensorType(op.scale(), 1))
+  auto scale = GetRankedTensorTypeForOperand(op.scale());
+  if (scale && !IsOfRankedFloatTensorType(scale, 1))
     return op.emitOpError("requires scale to be a 1D float tensor");
 
-  if (!isOfRankedFloatTensorType(op.offset(), 1))
+  auto offset = GetRankedTensorTypeForOperand(op.offset());
+  if (offset && !IsOfRankedFloatTensorType(offset, 1))
     return op.emitOpError("requires offset to be a 1D float tensor");
 
-  if (!isOfRankedFloatTensorType(op.mean(), 1))
+  auto mean = GetRankedTensorTypeForOperand(op.mean());
+  if (mean && !IsOfRankedFloatTensorType(mean, 1))
     return op.emitOpError("requires mean to be a 1D float tensor");
 
-  if (!isOfRankedFloatTensorType(op.variance(), 1))
+  auto variance = GetRankedTensorTypeForOperand(op.variance());
+  if (variance && !IsOfRankedFloatTensorType(variance, 1))
     return op.emitOpError("requires variance to be a 1D float tensor");
 
   // TODO(antiagainst): check attributes
@@ -1313,7 +1669,34 @@ static LogicalResult Verify(FusedBatchNormOp op) {
 
 LogicalResult FusedBatchNormV3Op::FoldOperandsPermutation(
     ArrayRef<int64_t> permutation) {
+  // FusedBatchNorm in training mode is a layout sentitive operation, and should
+  // have already assigned an optimal data format.
+  if (is_training()) return failure();
+
   return ::mlir::TF::FoldOperandsPermutation(permutation, this);
+}
+
+LogicalResult FusedBatchNormV3Op::UpdateDataFormat(StringRef data_format) {
+  return ::mlir::TF::UpdateDataFormat(data_format, this);
+}
+
+StringRef FusedBatchNormV3Op::GetOptimalLayout(const RuntimeDevices &devices) {
+  // In inference mode FusedBatchNorm is not sensitive to data layout.
+  if (!is_training()) return data_format();
+
+  // Keep current data format if no GPUs are available or if explicit placement
+  // does not allow to use GPU for this operation.
+  if (!CanUseGpuDevice(devices) || !CanUseGpuDevice(getOperation()))
+    return data_format();
+
+  // For f16 data type on devices with Tensor Cores support NHWC data format
+  // is up to ~2x faster.
+  auto x_ty = x().getType().cast<TensorType>();
+  const bool is_f16 = x_ty.getElementType().isF16();
+  if (is_f16 && CanUseTensorCores(devices)) return "NHWC";
+
+  // For all other data types prefer NCHW.
+  return "NCHW";
 }
 
 //===----------------------------------------------------------------------===//
@@ -1865,6 +2248,49 @@ static LogicalResult VerifyPartitionedCall(OpClass op) {
 }
 
 //===----------------------------------------------------------------------===//
+// PowOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult PowOp::fold(ArrayRef<Attribute> operands) {
+  auto constant_y = operands[1].dyn_cast_or_null<DenseFPElementsAttr>();
+  if (constant_y && constant_y.isSplat()) {
+    APFloat y_value = constant_y.getSplatValue<APFloat>();
+    auto output_type = getType().cast<ShapedType>();
+    if (y_value.isZero() && output_type.hasStaticShape()) {
+      return DenseElementsAttr::get(
+          output_type,
+          FloatAttr::get(output_type.getElementType(), /*value=*/1.0));
+    }
+    if (y_value.isExactlyValue(1.0)) {
+      return x();
+    }
+  }
+  return {};
+}
+
+//===----------------------------------------------------------------------===//
+// QrOp
+//===----------------------------------------------------------------------===//
+
+// Verifies that,
+//
+// * Input type, if ranked, must have at least 2 dimensions and at most
+//   INT32_MAX dimensions.
+//
+static LogicalResult Verify(QrOp op) {
+  auto ttype = op.input().getType().cast<TensorType>();
+  if (!ttype.hasRank()) return success();
+  if (!HasRankAtLeast(op.input(), 2))
+    return op.emitOpError(
+        "requires ranked input tensor to be of rank 2 or more");
+  if (!HasRankAtMost(op.input(), std::numeric_limits<int32_t>::max()))
+    return op.emitOpError(
+        "requires ranked input tensor to be of rank INT32_MAX or less");
+
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
 // ReciprocalOp
 //===----------------------------------------------------------------------===//
 
@@ -1948,7 +2374,7 @@ static LogicalResult Verify(ReshapeOp op) {
   if (rank_by_shape == -1 || !type_of_tensor.hasStaticShape()) return success();
   int64_t num_by_tensor = type_of_tensor.getNumElements();
 
-  auto out_ty = op.getType().cast<RankedTensorType>();
+  auto out_ty = op.getType().dyn_cast<RankedTensorType>();
   if (out_ty && out_ty.hasStaticShape()) {
     int64_t num_output_elements = out_ty.getNumElements();
     if (num_by_tensor != num_output_elements)
@@ -2107,7 +2533,8 @@ LogicalResult VerifyShapeOperandAndResult(Operation *op, Type operand_type,
       variadic_idx < 0 ? "" : llvm::formatv(" #{0}", variadic_idx).str();
 
   auto result_ranked_type = result_type.dyn_cast<RankedTensorType>();
-  if (!result_ranked_type || result_ranked_type.getShape().size() != 1)
+  if (!result_ranked_type) return success();
+  if (result_ranked_type.getShape().size() != 1)
     return op->emitOpError("requires 1D type for result") << variadic_idx_str;
 
   auto operand_ranked_type = operand_type.dyn_cast_or_null<RankedTensorType>();
@@ -2238,12 +2665,15 @@ static LogicalResult Verify(SizeOp op) {
 // SliceOp
 //===----------------------------------------------------------------------===//
 
-// Verifies that,
+// Verifies that:
 //
 // - operands begin and size are 1D with the same number of elements.
 // - if the input is a ranked tensor, the rank of the input equals the number
 //   of elements in operands begin and size.
-// - if begin are constants, 0 <= begin[i] < input_ty.getShape()[i]
+// - if begin are constants, that
+//   0 <= begin[i] <= begin[i] + size[i] <= input_ty.getShape()[i]
+// - if begins aren't constant but the input is a ranked tensor, that
+//   size[i] <= input_ty.getShape()[i]
 //
 static LogicalResult Verify(SliceOp op) {
   RankedTensorType begin_ty = GetRankedTensorTypeForOperand(op.begin());
@@ -2277,7 +2707,7 @@ static LogicalResult Verify(SliceOp op) {
     bool constant_slice_sizes =
         matchPattern(op.size(), m_Constant(&slice_sizes));
     int dim = 0;
-    for (APInt raw_begin_index : begin_indices.getValues<APInt>()) {
+    for (const APInt &raw_begin_index : begin_indices.getValues<APInt>()) {
       int64_t begin_index = raw_begin_index.getSExtValue();
       int64_t input_size = input_ty ? input_ty.getShape()[dim] : -1;
       int64_t slice_size = constant_slice_sizes
@@ -2292,6 +2722,20 @@ static LogicalResult Verify(SliceOp op) {
                << "requires 0 <= begin[i] <= begin[i] + size[i] <= Di";
       }
       ++dim;
+    }
+  } else if (input_ty) {
+    // If the inputs are ranked, we can do a few more sanity checks.
+    DenseIntElementsAttr slice_sizes;
+    if (matchPattern(op.size(), m_Constant(&slice_sizes))) {
+      auto input_shape = input_ty.getShape();
+      for (int64_t i = 0; i < input_ty.getRank(); ++i) {
+        int64_t slice_size = slice_sizes.getValue<IntegerAttr>(i).getInt();
+        int64_t input_size = input_shape[i];
+        if (slice_size != -1 && input_size != -1 && slice_size > input_size) {
+          return op.emitOpError() << "requires size[i] <= Di, even if begin[i] "
+                                     "is unknown at compile time";
+        }
+      }
     }
   }
 
@@ -2509,6 +2953,12 @@ void SumOp::build(Builder *builder, OperationState &result, Value input,
 //===----------------------------------------------------------------------===//
 // StridedSliceOp
 //===----------------------------------------------------------------------===//
+
+// TODO(b/154160827): Add a canonicalization pattern from tf.StridedSliceOp to
+// tf.SliceOp if both of the following are true:
+// - All strides have a known value equal to 1
+// - No masks are set (or masks can be applied by transforming the inputs to
+//   Slice)
 
 // Verifies that,
 //
@@ -2976,15 +3426,15 @@ namespace {
 // function and can be removed.
 class ToBoolOfZeroDBoolTensor : public OpRewritePattern<ToBoolOp> {
   using OpRewritePattern<ToBoolOp>::OpRewritePattern;
-  PatternMatchResult matchAndRewrite(ToBoolOp op,
-                                     PatternRewriter &rewriter) const override {
+  LogicalResult matchAndRewrite(ToBoolOp op,
+                                PatternRewriter &rewriter) const override {
     if (auto type = op.getOperand().getType().dyn_cast<RankedTensorType>()) {
       if (type.getRank() == 0 && type.getElementType().isInteger(1)) {
         rewriter.replaceOp(op, op.getOperand());
-        return matchSuccess();
+        return success();
       }
     }
-    return matchFailure();
+    return failure();
   }
 };
 }  // namespace
@@ -3030,7 +3480,7 @@ void TransposeOp::build(Builder *builder, OperationState &result, Value x,
           x_type.getDimSize((*attr_shape.begin()).getSExtValue()));
     } else {
       const_shape.reserve(attr_shape.getNumElements());
-      for (auto dim : attr_shape)
+      for (const auto &dim : attr_shape)
         const_shape.push_back(x_type.getDimSize(dim.getSExtValue()));
     }
     return TransposeOp::build(
